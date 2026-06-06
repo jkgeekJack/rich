@@ -3,7 +3,8 @@ const colors = {
   purple: "#8150de",
   red: "#d93f36",
   yellow: "#e3bf13",
-  blue: "#2f82bd"
+  blue: "#2f82bd",
+  orange: "#f7931a"
 };
 
 const grid = document.querySelector("#dashboardGrid");
@@ -52,8 +53,9 @@ function renderDashboard(payload) {
     payload.cards.fearGreed,
     payload.cards.playbook,
     payload.cards.gold,
-    payload.cards.treasury
-  ];
+    payload.cards.treasury,
+    payload.cards.btc
+  ].filter(Boolean);
 
   grid.innerHTML = orderedCards.map(renderCard).join("");
   strategyGrid.innerHTML = payload.strategy.map(renderStrategy).join("");
@@ -162,8 +164,9 @@ function renderPlaybook(card, accentStyle) {
 }
 
 function renderMini(card, accentStyle) {
+  const variant = card.accent === "yellow" ? "gold" : card.accent === "orange" ? "btc" : "tnx";
   return `
-    <article class="card mini-card ${card.accent === "yellow" ? "gold" : "tnx"} ${card.isLive ? "" : "unavailable"}" ${accentStyle}>
+    <article class="card mini-card ${variant} ${card.isLive ? "" : "unavailable"}" ${accentStyle}>
       <div class="accent-bar"></div>
       <div class="mini-copy">
         <h2>${escapeHtml(card.title).replace(/\n/g, "<br />")}</h2>
@@ -171,7 +174,7 @@ function renderMini(card, accentStyle) {
         <strong>${formatValue(card.value, card.valueFormat)}</strong>
       </div>
       <span class="change-badge green">${escapeHtml(card.badge)}</span>
-      <canvas class="mini-canvas" width="280" height="112" data-color="${colors[card.accent]}" data-series="${seriesData(card.series)}" data-labels="${labelData(card.seriesLabels)}"></canvas>
+      <canvas class="mini-canvas" width="${variant === "btc" ? 920 : 280}" height="112" data-color="${colors[card.accent]}" data-series="${seriesData(card.series)}" data-labels="${labelData(card.seriesLabels)}"></canvas>
       <div class="mini-trend-label">折线 · ${escapeHtml(card.seriesPeriodLabel ?? "当日")}日线</div>
       ${renderSource(card)}
     </article>
@@ -329,6 +332,7 @@ function pointerPosition(value) {
 function formatValue(value, format) {
   if (typeof value !== "number") return "--";
   if (format === "currency") return `$${formatNumber(value, 2)}`;
+  if (format === "currency0") return `$${formatNumber(value, 0)}`;
   if (format === "percent") return `${formatNumber(value, 2)}%`;
   return formatNumber(value, 2);
 }

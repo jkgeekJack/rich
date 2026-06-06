@@ -205,7 +205,7 @@ async function loadSentimentSnapshot(periodKey = "1y") {
 
   const startedAt = Date.now();
   const failures = [];
-  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe] = await Promise.all([
+  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc] = await Promise.all([
     fetchIndexQuote("^spx", "^GSPC", chartPeriod).catch((error) =>
       failedValue(failures, "S&P 500", error)
     ),
@@ -222,10 +222,11 @@ async function loadSentimentSnapshot(periodKey = "1y") {
     fetchNfinRsi("SPY").catch((error) => failedValue(failures, "S&P RSI", error)),
     fetchNfinRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error)),
     fetchSp500Pe().catch((error) => failedValue(failures, "S&P PE", error)),
-    fetchNasdaq100Pe().catch((error) => failedValue(failures, "Nasdaq 100 PE", error))
+    fetchNasdaq100Pe().catch((error) => failedValue(failures, "Nasdaq 100 PE", error)),
+    fetchYahooQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC/USD", error))
   ]);
 
-  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe].filter(
+  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc].filter(
     (item) => item?.isLive
   ).length;
   const snapshot = {
@@ -286,7 +287,8 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       fearGreed: buildFearGreedCard(fearGreed),
       playbook: buildPlaybookCard(fearGreed),
       gold: buildMiniCard("GOLD\nXAU/USD", "伦敦金 · 美元/\n盎司", gold, "currency"),
-      treasury: buildMiniCard("10Y\nUST ·\n^TNX", "十年期\n美国收益率", treasury, "percent")
+      treasury: buildMiniCard("10Y\nUST ·\n^TNX", "十年期\n美国收益率", treasury, "percent"),
+      btc: buildMiniCard("BTC\nBTC/USD", "比特币 ·\n美元", btc, "currency0")
     },
     strategy: buildStrategy(spRsi, ndxRsi)
   };
@@ -843,7 +845,7 @@ function buildPlaybookCard(fearGreed) {
 function buildMiniCard(title, subtitle, quote, format) {
   return {
     kind: "mini",
-    accent: title.startsWith("GOLD") ? "yellow" : "blue",
+    accent: title.startsWith("GOLD") ? "yellow" : title.startsWith("BTC") ? "orange" : "blue",
     title,
     subtitle,
     value: quote?.isLive ? quote.price : null,
