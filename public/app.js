@@ -54,7 +54,8 @@ function renderDashboard(payload) {
     payload.cards.playbook,
     payload.cards.gold,
     payload.cards.treasury,
-    payload.cards.btc
+    payload.cards.btc,
+    payload.cards.btcMvrv
   ].filter(Boolean);
 
   grid.innerHTML = orderedCards.map(renderCard).join("");
@@ -174,7 +175,7 @@ function renderMini(card, accentStyle) {
         <strong>${formatValue(card.value, card.valueFormat)}</strong>
       </div>
       <span class="change-badge green">${escapeHtml(card.badge)}</span>
-      <canvas class="mini-canvas" width="${variant === "btc" ? 920 : 280}" height="112" data-color="${colors[card.accent]}" data-series="${seriesData(card.series)}" data-labels="${labelData(card.seriesLabels)}"></canvas>
+      <canvas class="mini-canvas" width="280" height="112" data-color="${colors[card.accent]}" data-series="${seriesData(card.series)}" data-labels="${labelData(card.seriesLabels)}"></canvas>
       <div class="mini-trend-label">折线 · ${escapeHtml(card.seriesPeriodLabel ?? "当日")}日线</div>
       ${renderSource(card)}
     </article>

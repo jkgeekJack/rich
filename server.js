@@ -205,7 +205,7 @@ async function loadSentimentSnapshot(periodKey = "1y") {
 
   const startedAt = Date.now();
   const failures = [];
-  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc] = await Promise.all([
+  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv] = await Promise.all([
     fetchIndexQuote("^spx", "^GSPC", chartPeriod).catch((error) =>
       failedValue(failures, "S&P 500", error)
     ),
@@ -223,10 +223,11 @@ async function loadSentimentSnapshot(periodKey = "1y") {
     fetchNfinRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error)),
     fetchSp500Pe().catch((error) => failedValue(failures, "S&P PE", error)),
     fetchNasdaq100Pe().catch((error) => failedValue(failures, "Nasdaq 100 PE", error)),
-    fetchYahooQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC/USD", error))
+    fetchYahooQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC/USD", error)),
+    fetchMvrvZScore().catch((error) => failedValue(failures, "BTC MVRV Z-Score", error))
   ]);
 
-  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc].filter(
+  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv].filter(
     (item) => item?.isLive
   ).length;
   const snapshot = {
@@ -288,9 +289,10 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       playbook: buildPlaybookCard(fearGreed),
       gold: buildMiniCard("GOLD\nXAU/USD", "伦敦金 · 美元/\n盎司", gold, "currency"),
       treasury: buildMiniCard("10Y\nUST ·\n^TNX", "十年期\n美国收益率", treasury, "percent"),
-      btc: buildMiniCard("BTC\nBTC/USD", "比特币 ·\n美元", btc, "currency0")
+      btc: buildMiniCard("BTC\nBTC/USD", "比特币 ·\n美元", btc, "currency0"),
+      btcMvrv: buildMvrvCard(mvrv)
     },
-    strategy: buildStrategy(spRsi, ndxRsi)
+    strategy: buildStrategy(spRsi, ndxRsi, mvrv)
   };
 
   sentimentCache.set(chartPeriod.key, { fetchedAt: Date.now(), data: snapshot });
@@ -426,6 +428,74 @@ function parseCsvRow(row) {
   }
   values.push(current);
   return values;
+}
+
+// MVRV Z-Score = (市值 − 已实现市值) / 市值标准差，日更指标。
+// bitcoin-data.com 免费档限 8 次/小时，独立长缓存并在源失败时回退旧值。
+const mvrvBands = [
+  [0, "历史底部区", "重仓买入"],
+  [2, "低估积累区", "坚持定投"],
+  [3.5, "合理偏高", "持有观察"],
+  [6, "牛市偏热", "分批止盈"],
+  [7, "顶部预警", "大幅减仓"],
+  [Infinity, "极度泡沫", "清仓离场"]
+];
+const mvrvBandsEn = ["BOTTOM ZONE", "ACCUMULATE", "FAIR-HIGH", "OVERHEATED", "TOP WARNING", "BUBBLE"];
+let mvrvCache = null;
+const mvrvCacheTtlMs = 3 * 60 * 60 * 1000;
+
+async function fetchMvrvZScore() {
+  if (mvrvCache && Date.now() - mvrvCache.fetchedAt < mvrvCacheTtlMs) return mvrvCache.data;
+  try {
+    const response = await fetchWithTimeout("https://bitcoin-data.com/v1/mvrv-zscore/last", {
+      timeoutMs: quoteRequestTimeoutMs,
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) throw new Error(`MVRV bitcoin-data returned ${response.status}`);
+    const payload = await response.json();
+    const value = Number(payload.mvrvZscore);
+    if (!Number.isFinite(value)) throw new Error("MVRV returned no numeric value");
+    const data = { value, date: payload.d, source: "bitcoin-data.com", isLive: true };
+    mvrvCache = { fetchedAt: Date.now(), data };
+    return data;
+  } catch (error) {
+    if (mvrvCache?.data) return mvrvCache.data;
+    throw error;
+  }
+}
+
+function mvrvActiveIndex(value) {
+  return typeof value === "number" ? mvrvBands.findIndex(([limit]) => value < limit) : -1;
+}
+
+function buildMvrvCard(mvrv) {
+  const rows = mvrvBands.map((row, index) => ({
+    range:
+      index === 0
+        ? `< ${row[0]}`
+        : index === mvrvBands.length - 1
+          ? `> ${mvrvBands[index - 1][0]}`
+          : `${mvrvBands[index - 1][0]}-${row[0]}`,
+    mood: row[1],
+    action: row[2]
+  }));
+  const value = mvrv?.isLive ? numberOrNull(mvrv.value) : null;
+  const active = mvrvActiveIndex(value);
+  const row = active >= 0 ? mvrvBands[active] : null;
+  return {
+    kind: "band",
+    accent: "orange",
+    title: "BTC MVRV Z-Score",
+    subtitle: `比特币估值 · (市值−已实现市值)/市值标准差${mvrv?.date ? ` · ${mvrv.date}` : ""}`,
+    value,
+    pill: row?.[1] ?? "不可用",
+    pillEn: active >= 0 ? mvrvBandsEn[active] : "NO SOURCE",
+    active,
+    rows,
+    source: mvrv?.source ?? "bitcoin-data.com",
+    isLive: Boolean(mvrv?.isLive),
+    error: mvrv?.error ?? null
+  };
 }
 
 async function fetchCboeQuote(symbol) {
@@ -863,11 +933,28 @@ function buildMiniCard(title, subtitle, quote, format) {
   };
 }
 
-function buildStrategy(spRsi, ndxRsi) {
+function buildStrategy(spRsi, ndxRsi, mvrv) {
   return [
     buildStrategyItem("sp", "标普500", spRsi),
-    buildStrategyItem("ndx", "纳指100", ndxRsi)
+    buildStrategyItem("ndx", "纳指100", ndxRsi),
+    buildBtcStrategyItem(mvrv)
   ];
+}
+
+function buildBtcStrategyItem(mvrv) {
+  const value = mvrv?.isLive ? numberOrNull(mvrv.value) : null;
+  const active = mvrvActiveIndex(value);
+  const scores = [2, 1, 0, -1, -2, -2];
+  return {
+    key: "btc",
+    score: active >= 0 ? scores[active] : null,
+    action: active >= 0 ? mvrvBands[active][2] : "等待实时源",
+    detail:
+      active >= 0
+        ? `比特币 MVRV Z ${value.toFixed(2)} · ${mvrvBands[active][1]}`
+        : "比特币 MVRV Z · 实时源不可用",
+    isLive: Boolean(mvrv?.isLive)
+  };
 }
 
 function buildStrategyItem(key, label, rsi) {

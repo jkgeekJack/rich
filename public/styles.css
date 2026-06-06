@@ -10,6 +10,7 @@
   --yellow: #e3bf13;
   --pink: #d85283;
   --blue: #2f82bd;
+  --orange: #f7931a;
   --card-radius: 16px;
 }
 
@@ -512,8 +513,8 @@ h2 {
   left: 28px;
 }
 
-.mini-card.btc {
-  grid-column: 1 / -1;
+.strategy-card.btc {
+  color: var(--orange);
 }
 
 .mini-copy {
@@ -574,7 +575,7 @@ h2 {
 
 .strategy-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
 }
 
