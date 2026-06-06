@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>今日美股情绪观察</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@500;700;800;900&family=Inter:wght@700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="poster" aria-label="今日美股情绪观察">
+      <header class="hero">
+        <h1>今日美股情绪观察</h1>
+        <div class="hero-tools">
+          <div class="date-pill">实时日期获取中</div>
+          <div class="period-toggle" aria-label="折线图周期">
+            <button class="period-button active" type="button" data-period="1y">近1年</button>
+            <button class="period-button" type="button" data-period="3y">近3年</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="grid" id="dashboardGrid"></section>
+
+      <section class="strategy" aria-label="今日美股定投策略">
+        <h2>今日美股定投策略</h2>
+        <div class="strategy-grid"></div>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
