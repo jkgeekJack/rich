@@ -85,7 +85,7 @@ function renderIndex(card, accentStyle) {
       <p class="move ${card.badgeTone}">${formatSignedMoney(card.change)} · ${escapeHtml(card.moveLabel)}</p>
       <div class="metrics">
         ${renderMetricLine("PE", card.pe, card.peRank, card)}
-        ${renderMetricLine("Fwd", card.forwardPe, card.forwardRank, card)}
+        ${typeof card.forwardPe === "number" ? renderMetricLine("Fwd", card.forwardPe, card.forwardRank, card) : ""}
       </div>
       <div class="metrics-source">${escapeHtml(formatMetricSource(card))}</div>
       <div class="trend-label">PRICE TREND · ${escapeHtml(card.seriesPeriodLabel ?? "当日")}日线 · ${escapeHtml(card.seriesSource ?? card.source ?? "不可用")}</div>

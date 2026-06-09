@@ -647,15 +647,57 @@ async function fetchSp500Pe() {
 }
 
 async function fetchNasdaq100Pe() {
+  // 主源：蛋卷基金（trailing PE + 真·近10年分位）。蛋卷无 forward PE。
+  // 降级链：VCP（曾同时给 trailing+forward，现已客户端化大概率失败）→ Yahoo QQQ（trailing-only）。
   try {
-    return await fetchVcpNasdaq100Pe();
-  } catch (primaryError) {
+    return await fetchDanjuanNasdaq100Pe();
+  } catch (danjuanError) {
     try {
-      return await fetchYahooPe("QQQ");
-    } catch (fallbackError) {
-      throw new Error(`VCP Scanner: ${primaryError.message}; Yahoo fallback: ${fallbackError.message}`);
+      return await fetchVcpNasdaq100Pe();
+    } catch (vcpError) {
+      try {
+        return await fetchYahooPe("QQQ");
+      } catch (yahooError) {
+        throw new Error(
+          `Danjuan: ${danjuanError.message}; VCP: ${vcpError.message}; Yahoo: ${yahooError.message}`
+        );
+      }
     }
   }
+}
+
+async function fetchDanjuanNasdaq100Pe() {
+  const response = await fetchWithRetries("https://danjuanfunds.com/djapi/index_eva/detail/NDX", {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+      Accept: "application/json"
+    },
+    timeoutMs: newsRequestTimeoutMs,
+    retries: 2,
+    retryDelayMs: 2500
+  });
+  if (!response.ok) throw new Error(`蛋卷 Nasdaq 100 PE returned ${response.status}`);
+  const payload = await response.json();
+  if (payload.result_code !== 0 || !payload.data) {
+    throw new Error(`蛋卷 returned result_code ${payload.result_code}`);
+  }
+  const data = payload.data;
+  const pe = numberOrNull(data.pe);
+  const percentile = numberOrNull(data.pe_percentile);
+  if (typeof pe !== "number" || !Number.isFinite(pe)) {
+    throw new Error("蛋卷 returned no PE value");
+  }
+  return {
+    pe,
+    forwardPe: null,
+    // 蛋卷 pe_percentile 是 0-1 的近10年分位（数据自 2016 起），换算成 0-100 与下游一致
+    peRank: typeof percentile === "number" && Number.isFinite(percentile) ? percentile * 100 : null,
+    forwardRank: null,
+    updatedAt: data.date ?? null,
+    source: "蛋卷基金",
+    isLive: true
+  };
 }
 
 async function fetchVcpNasdaq100Pe() {
