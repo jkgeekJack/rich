@@ -671,20 +671,46 @@ async function fetchVcpNasdaq100Pe() {
   });
   if (!response.ok) throw new Error(`Nasdaq 100 PE returned ${response.status}`);
   const html = await response.text();
-  const text = html
-    .replace(/<!--\s*-->/g, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const summary = text.match(
-    /Nasdaq 100\s+P\/E ratio is\s+([\d.]+)x\s+as of\s+([0-9-]+),\s+with a forward P\/E of\s+([\d.]+)x/i
-  );
-  const fallback = text.match(/Trailing P\/E\s+([\d.]+)\s*x[\s\S]{0,240}?Forward P\/E\s+([\d.]+)\s*x/i);
-  const pe = summary ? Number(summary[1]) : fallback ? Number(fallback[1]) : null;
-  const forwardPe = summary ? Number(summary[3]) : fallback ? Number(fallback[2]) : null;
-  if (typeof pe !== "number" || !Number.isFinite(pe) || typeof forwardPe !== "number" || !Number.isFinite(forwardPe)) {
+
+  // 优先从页面内嵌 JSON 数据提取（Next.js Server Components 格式，引号被 JSON 转义为 \"）
+  let pe = null, forwardPe = null, updatedAt = null;
+  const jsonRaw = html.match(/\\"index_name\\":\\"nasdaq100\\"[^}]+\}/);
+  if (jsonRaw) {
+    const seg = jsonRaw[0];
+    const tm = seg.match(/\\"trailing_pe\\":([\d.]+)/);
+    const fm = seg.match(/\\"forward_pe\\":([\d.]+)/);
+    const dm = seg.match(/\\"snapshot_date\\":\\"([0-9-]+)\\"/);
+    pe = tm ? Number(tm[1]) : null;
+    forwardPe = fm ? Number(fm[1]) : null;
+    updatedAt = dm ? dm[1] : null;
+  }
+
+  // 降级：解析去标签文本（兼容旧格式及新 "X x CURRENT P/E" 格式）
+  if (!Number.isFinite(pe) || !Number.isFinite(forwardPe)) {
+    const text = html
+      .replace(/<!--\s*-->/g, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const newFmt = text.match(/([\d.]+)\s+x\s+CURRENT\s+P\/E[\s\S]{0,300}?([\d.]+)\s+x\s+FORWARD\s+P\/E/i);
+    const oldFmt = text.match(/Nasdaq 100\s+P\/E ratio is\s+([\d.]+)x\s+as of\s+([0-9-]+),\s+with a forward P\/E of\s+([\d.]+)x/i);
+    const txtFallback = text.match(/Trailing P\/E\s+([\d.]+)\s*x[\s\S]{0,240}?Forward P\/E\s+([\d.]+)\s*x/i);
+    if (newFmt) {
+      pe = Number(newFmt[1]);
+      forwardPe = Number(newFmt[2]);
+    } else if (oldFmt) {
+      pe = Number(oldFmt[1]);
+      forwardPe = Number(oldFmt[3]);
+      updatedAt = oldFmt[2];
+    } else if (txtFallback) {
+      pe = Number(txtFallback[1]);
+      forwardPe = Number(txtFallback[2]);
+    }
+  }
+
+  if (!Number.isFinite(pe) || !Number.isFinite(forwardPe)) {
     throw new Error("Nasdaq 100 PE page returned no parseable PE data");
   }
   return {
@@ -692,7 +718,7 @@ async function fetchVcpNasdaq100Pe() {
     forwardPe,
     peRank: null,
     forwardRank: null,
-    updatedAt: summary?.[2] ?? null,
+    updatedAt: updatedAt ?? null,
     source: "VCP Scanner",
     isLive: true
   };
