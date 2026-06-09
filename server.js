@@ -647,11 +647,13 @@ async function fetchSp500Pe() {
 }
 
 async function fetchNasdaq100Pe() {
-  // 主源：蛋卷基金（trailing PE + 真·近10年分位）。蛋卷无 forward PE。
-  // 降级链：VCP（曾同时给 trailing+forward，现已客户端化大概率失败）→ Yahoo QQQ（trailing-only）。
+  // 主源：蛋卷基金（trailing PE + 真·近10年分位）。蛋卷无 forward PE，
+  // 用 VCP 的内嵌 JSON 补 forward PE（best-effort，失败不影响主数据）。
+  let primary;
   try {
-    return await fetchDanjuanNasdaq100Pe();
+    primary = await fetchDanjuanNasdaq100Pe();
   } catch (danjuanError) {
+    // 蛋卷挂了：降级 VCP（同时给 trailing+forward）→ Yahoo QQQ（trailing-only）
     try {
       return await fetchVcpNasdaq100Pe();
     } catch (vcpError) {
@@ -664,6 +666,14 @@ async function fetchNasdaq100Pe() {
       }
     }
   }
+  try {
+    const fwd = await fetchVcpNasdaq100Pe();
+    primary.forwardPe = fwd.forwardPe; // 注意：forward 取自 VCP（盈利口径与蛋卷 trailing 略有差异）
+    primary.forwardSource = fwd.source;
+  } catch {
+    // forward PE 取不到就留空，Fwd 行前端自动隐藏
+  }
+  return primary;
 }
 
 async function fetchDanjuanNasdaq100Pe() {
