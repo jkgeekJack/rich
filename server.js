@@ -591,6 +591,8 @@ async function fetchYahooRsi(symbol) {
 }
 
 async function fetchNfinRsi(symbol) {
+  // ETF → 对应指数，避免 Yahoo Finance 对 ETF 429 限速
+  const yahooFallbackSymbol = { "SPY": "^GSPC", "QQQ": "^NDX" }[symbol] ?? symbol;
   try {
     const points = await fetchNfinHistoricalCloses(symbol);
     if (points.length < 20) throw new Error(`${symbol} nfin returned insufficient RSI data`);
@@ -602,8 +604,8 @@ async function fetchNfinRsi(symbol) {
       isLive: true
     };
   } catch (_) {
-    // nfin 不可达时降级到 Yahoo Finance RSI
-    return fetchYahooRsi(symbol);
+    // nfin 不可达时降级到 Yahoo Finance RSI（用指数代码规避 ETF 429 限速）
+    return fetchYahooRsi(yahooFallbackSymbol);
   }
 }
 
