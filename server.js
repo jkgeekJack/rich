@@ -205,7 +205,7 @@ async function loadSentimentSnapshot(periodKey = "1y") {
 
   const startedAt = Date.now();
   const failures = [];
-  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv] = await Promise.all([
+  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spPe, ndxPe, btc, mvrv] = await Promise.all([
     fetchIndexQuote("^spx", "^GSPC", chartPeriod).catch((error) =>
       failedValue(failures, "S&P 500", error)
     ),
@@ -219,12 +219,21 @@ async function loadSentimentSnapshot(periodKey = "1y") {
     fetchCboeQuote("_VXN").catch((error) => failedValue(failures, "VXN", error)),
     fetchTreasury10Year(chartPeriod).catch((error) => failedValue(failures, "10Y Treasury", error)),
     fetchCnnFearGreed().catch((error) => failedValue(failures, "CNN Fear & Greed", error)),
-    fetchNfinRsi("SPY").catch((error) => failedValue(failures, "S&P RSI", error)),
-    fetchNfinRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error)),
     fetchSp500Pe().catch((error) => failedValue(failures, "S&P PE", error)),
     fetchNasdaq100Pe().catch((error) => failedValue(failures, "Nasdaq 100 PE", error)),
     fetchYahooQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC/USD", error)),
     fetchMvrvZScore().catch((error) => failedValue(failures, "BTC MVRV Z-Score", error))
+  ]);
+  // RSI 优先从已拉取的历史序列计算（无额外请求），序列不足时才降级 nfin
+  const spRsiFromSeries = calcRsiFromQuote(sp500);
+  const ndxRsiFromSeries = calcRsiFromQuote(ndx);
+  const [spRsi, ndxRsi] = await Promise.all([
+    spRsiFromSeries
+      ? Promise.resolve(spRsiFromSeries)
+      : fetchNfinRsi("SPY").catch((error) => failedValue(failures, "S&P RSI", error)),
+    ndxRsiFromSeries
+      ? Promise.resolve(ndxRsiFromSeries)
+      : fetchNfinRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error))
   ]);
 
   const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv].filter(
@@ -1053,6 +1062,18 @@ function buildStrategyItem(key, label, rsi) {
     action,
     detail: typeof value === "number" ? `${label} RSI ${value.toFixed(1)} · ${state}` : `${label} RSI · 实时源不可用`,
     isLive: Boolean(rsi?.isLive)
+  };
+}
+
+function calcRsiFromQuote(quote) {
+  if (!quote?.isLive || !Array.isArray(quote.series) || quote.series.length < 20) return null;
+  const values = quote.series;
+  return {
+    value: calculateRsi(values, 14),
+    change: calculateRsi(values.slice(0, -1), 14),
+    updatedAt: quote.updatedAt ?? new Date().toISOString(),
+    source: quote.seriesSource ?? "Yahoo Finance chart",
+    isLive: true
   };
 }
 
