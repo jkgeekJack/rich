@@ -591,15 +591,20 @@ async function fetchYahooRsi(symbol) {
 }
 
 async function fetchNfinRsi(symbol) {
-  const points = await fetchNfinHistoricalCloses(symbol);
-  if (points.length < 20) throw new Error(`${symbol} nfin returned insufficient RSI data`);
-  return {
-    value: calculateRsi(points.map((point) => point.value), 14),
-    change: calculateRsi(points.slice(0, -1).map((point) => point.value), 14),
-    updatedAt: points.at(-1).time,
-    source: "nfin Nasdaq API",
-    isLive: true
-  };
+  try {
+    const points = await fetchNfinHistoricalCloses(symbol);
+    if (points.length < 20) throw new Error(`${symbol} nfin returned insufficient RSI data`);
+    return {
+      value: calculateRsi(points.map((point) => point.value), 14),
+      change: calculateRsi(points.slice(0, -1).map((point) => point.value), 14),
+      updatedAt: points.at(-1).time,
+      source: "nfin Nasdaq API",
+      isLive: true
+    };
+  } catch (_) {
+    // nfin 不可达时降级到 Yahoo Finance RSI
+    return fetchYahooRsi(symbol);
+  }
 }
 
 async function fetchNfinHistoricalCloses(symbol) {
