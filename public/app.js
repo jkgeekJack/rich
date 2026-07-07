@@ -55,7 +55,8 @@ function renderDashboard(payload) {
     payload.cards.gold,
     payload.cards.treasury,
     payload.cards.btc,
-    payload.cards.btcMvrv
+    payload.cards.btcMvrv,
+    payload.cards.ashareValue
   ].filter(Boolean);
 
   grid.innerHTML = orderedCards.map(renderCard).join("");
@@ -101,7 +102,7 @@ function renderBand(card, accentStyle) {
       <div class="accent-bar"></div>
       <h2>${escapeHtml(card.title)}</h2>
       <p class="sub">${escapeHtml(card.subtitle)}</p>
-      <strong class="center-number">${formatNumber(card.value, 2)}</strong>
+      <strong class="center-number">${formatNumber(card.value, 2)}${card.valueSuffix ? escapeHtml(card.valueSuffix) : ""}</strong>
       <div class="state-pill"><b>${escapeHtml(card.pill)}</b><span>${escapeHtml(card.pillEn)}</span></div>
       <div class="band-table">
         ${card.rows

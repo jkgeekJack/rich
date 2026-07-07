@@ -205,7 +205,7 @@ async function loadSentimentSnapshot(periodKey = "1y") {
 
   const startedAt = Date.now();
   const failures = [];
-  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spPe, ndxPe, btc, mvrv] = await Promise.all([
+  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spPe, ndxPe, btc, mvrv, ashareValue] = await Promise.all([
     fetchIndexQuote("^spx", "^GSPC", chartPeriod).catch((error) =>
       failedValue(failures, "S&P 500", error)
     ),
@@ -222,7 +222,8 @@ async function loadSentimentSnapshot(periodKey = "1y") {
     fetchSp500Pe().catch((error) => failedValue(failures, "S&P PE", error)),
     fetchNasdaq100Pe().catch((error) => failedValue(failures, "Nasdaq 100 PE", error)),
     fetchYahooQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC/USD", error)),
-    fetchMvrvZScore().catch((error) => failedValue(failures, "BTC MVRV Z-Score", error))
+    fetchMvrvZScore().catch((error) => failedValue(failures, "BTC MVRV Z-Score", error)),
+    fetchAshareValue().catch((error) => failedValue(failures, "A股性价比", error))
   ]);
   // RSI 优先从已拉取的历史序列计算（无额外请求），序列不足时才降级 nfin
   const spRsiFromSeries = calcRsiFromQuote(sp500);
@@ -236,7 +237,7 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       : fetchNfinRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error))
   ]);
 
-  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv].filter(
+  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv, ashareValue].filter(
     (item) => item?.isLive
   ).length;
   const snapshot = {
@@ -258,6 +259,7 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       "nfin Nasdaq API",
       "History of Market",
       "VCP Scanner",
+      "好买基金 估值性价比",
       "Yahoo Finance fallback"
     ],
     failures,
@@ -299,9 +301,10 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       gold: buildMiniCard("GOLD\nXAU/USD", "伦敦金 · 美元/\n盎司", gold, "currency"),
       treasury: buildMiniCard("10Y\nUST ·\n^TNX", "十年期\n美国收益率", treasury, "percent"),
       btc: buildMiniCard("BTC\nBTC/USD", "比特币 ·\n美元", btc, "currency0"),
-      btcMvrv: buildMvrvCard(mvrv)
+      btcMvrv: buildMvrvCard(mvrv),
+      ashareValue: buildAshareValueCard(ashareValue)
     },
-    strategy: buildStrategy(spRsi, ndxRsi, mvrv)
+    strategy: buildStrategy(spRsi, ndxRsi, mvrv, ashareValue)
   };
 
   sentimentCache.set(chartPeriod.key, { fetchedAt: Date.now(), data: snapshot });
@@ -504,6 +507,112 @@ function buildMvrvCard(mvrv) {
     source: mvrv?.source ?? "bitcoin-data.com",
     isLive: Boolean(mvrv?.isLive),
     error: mvrv?.error ?? null
+  };
+}
+
+// A股性价比 = 好买“股债性价比”估值模型（沪深300），日更。
+// data.howbuy.com 公开 JSONP，无需签名/referer；time=1N 字段为空，固定取近3年(3N)。
+// dqxjbCode 1-5 从高到低映射性价比档位，越低越贵。
+const ashareValueBands = [
+  ["高", "低位", "积极配置", "HIGH VALUE"],
+  ["较高", "偏低位", "逢低布局", "GOOD VALUE"],
+  ["适中", "适中", "均衡持有", "FAIR"],
+  ["较低", "偏高位", "谨慎控仓", "RICH"],
+  ["低", "高位", "落袋观望", "EXPENSIVE"]
+];
+let ashareValueCache = null;
+const ashareValueCacheTtlMs = 3 * 60 * 60 * 1000;
+
+async function fetchAshareValue() {
+  if (ashareValueCache && Date.now() - ashareValueCache.fetchedAt < ashareValueCacheTtlMs) {
+    return ashareValueCache.data;
+  }
+  try {
+    const url =
+      "https://data.howbuy.com/cgi/fund/gzxjb/moduleData.json" +
+      "?h5req=1&corpId=100009&coopId=RO1906W01&zqdm=000300&time=3N&tab=1&callback=cb";
+    const response = await fetchWithTimeout(url, {
+      timeoutMs: quoteRequestTimeoutMs,
+      headers: { Accept: "*/*", "User-Agent": "Mozilla/5.0" }
+    });
+    if (!response.ok) throw new Error(`Howbuy 估值性价比 returned ${response.status}`);
+    const text = await response.text();
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("Howbuy 估值性价比 返回无法解析");
+    const body = JSON.parse(match[0]).body ?? {};
+    const code = Number.parseInt(body.dqxjbCode, 10);
+    if (!Number.isFinite(code) || code < 1 || code > 5) {
+      throw new Error("Howbuy 估值性价比 缺少有效档位");
+    }
+    const data = {
+      code,
+      pe: numberOrNull(Number.parseFloat(body.pe)),
+      label: body.dqxjb || null,
+      step: body.step || null,
+      dividendYield: numberOrNull(Number.parseFloat(body.gxl)),
+      dividendRank: numberOrNull(Number.parseFloat(body.gxlfwz)),
+      fedRank: numberOrNull(Number.parseFloat(body.fedfwz)),
+      source: "好买基金 data.howbuy.com",
+      isLive: true
+    };
+    ashareValueCache = { fetchedAt: Date.now(), data };
+    return data;
+  } catch (error) {
+    if (ashareValueCache?.data) return ashareValueCache.data;
+    throw error;
+  }
+}
+
+function buildAshareValueCard(value) {
+  const rows = ashareValueBands.map((row) => ({
+    range: `性价比 ${row[0]}`,
+    mood: row[1],
+    action: row[2]
+  }));
+  const active = value?.isLive && value.code >= 1 && value.code <= 5 ? value.code - 1 : -1;
+  const band = active >= 0 ? ashareValueBands[active] : null;
+  const pe = numberOrNull(value?.pe);
+  const fedRank = numberOrNull(value?.fedRank);
+  const dividend = numberOrNull(value?.dividendYield);
+  const dividendRank = numberOrNull(value?.dividendRank);
+  const detail = [];
+  if (pe !== null) detail.push(`PE ${pe.toFixed(2)}`);
+  if (dividend !== null) {
+    detail.push(
+      dividendRank !== null
+        ? `股息率 ${dividend.toFixed(2)}%(分位${dividendRank.toFixed(0)}%)`
+        : `股息率 ${dividend.toFixed(2)}%`
+    );
+  }
+  return {
+    kind: "band",
+    accent: "red",
+    title: "A股性价比 · 沪深300",
+    subtitle: `好买股债性价比 · 近3年分位${detail.length ? ` · ${detail.join(" · ")}` : ""}`,
+    value: fedRank,
+    valueSuffix: fedRank !== null ? "%" : null,
+    pill: value?.isLive ? (value.label ?? band?.[0] ?? "不可用") : "不可用",
+    pillEn: active >= 0 ? ashareValueBands[active][3] : "NO SOURCE",
+    active,
+    rows,
+    source: value?.source ?? "好买基金 data.howbuy.com",
+    isLive: Boolean(value?.isLive),
+    error: value?.error ?? null
+  };
+}
+
+function buildAshareStrategyItem(value) {
+  const active = value?.isLive && value.code >= 1 && value.code <= 5 ? value.code - 1 : -1;
+  const band = active >= 0 ? ashareValueBands[active] : null;
+  const scores = [2, 1, 0, -1, -2];
+  return {
+    key: "ashare",
+    score: active >= 0 ? scores[active] : null,
+    action: band ? band[2] : "等待实时源",
+    detail: band
+      ? `沪深300 性价比${value.label ?? band[0]} · ${band[1]}`
+      : "沪深300 估值性价比 · 实时源不可用",
+    isLive: Boolean(value?.isLive)
   };
 }
 
@@ -1027,11 +1136,12 @@ function buildMiniCard(title, subtitle, quote, format) {
   };
 }
 
-function buildStrategy(spRsi, ndxRsi, mvrv) {
+function buildStrategy(spRsi, ndxRsi, mvrv, ashareValue) {
   return [
     buildStrategyItem("sp", "标普500", spRsi),
     buildStrategyItem("ndx", "纳指100", ndxRsi),
-    buildBtcStrategyItem(mvrv)
+    buildBtcStrategyItem(mvrv),
+    buildAshareStrategyItem(ashareValue)
   ];
 }
 
