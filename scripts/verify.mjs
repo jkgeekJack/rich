@@ -39,7 +39,8 @@ const expectedCards = [
   "treasury",
   "btc",
   "btcMvrv",
-  "dollar"
+  "dollar",
+  "ashareValue"
 ];
 const cardKeys = Object.keys(sentiment.cards ?? {});
 const missingKeys = expectedCards.filter((key) => !cardKeys.includes(key));
@@ -59,7 +60,8 @@ const requiredLiveCards = [
   "treasury",
   "btc",
   "btcMvrv",
-  "dollar"
+  "dollar",
+  "ashareValue"
 ];
 const missingLiveCards = requiredLiveCards.filter((key) => !sentiment.cards?.[key]?.isLive);
 if (missingLiveCards.length) {
@@ -94,6 +96,25 @@ for (const key of ["gold", "treasury", "btc", "dollar"]) {
 if (sentiment.cards.btcMvrv.kind !== "band") throw new Error("btcMvrv should be a band card");
 if (!sentiment.cards.dollar.title.includes("美元指数")) throw new Error("dollar card missing 美元指数 title");
 
+const ashareValue = sentiment.cards.ashareValue;
+if (ashareValue.kind !== "rank" || typeof ashareValue.value !== "number") {
+  throw new Error(`Expected live A-share value rank card, got ${JSON.stringify(ashareValue)}`);
+}
+const expectedAshareBand = [10, 30, 70, 90, Infinity].findIndex((limit) => ashareValue.value < limit);
+const expectedAshareRanges = ["前0%-10%", "前10%-30%", "前30%-70%", "前70%-90%", "前90%-100%"];
+const expectedAshareValues = ["高", "较高", "中等", "较低", "低"];
+const expectedAshareTones = ["green", "blue", "yellow", "orange", "red"];
+if (
+  ashareValue.active !== expectedAshareBand ||
+  ashareValue.rows?.map((row) => row.rank).join("|") !== expectedAshareRanges.join("|") ||
+  ashareValue.rows?.map((row) => row.value).join("|") !== expectedAshareValues.join("|") ||
+  ashareValue.rows?.map((row) => row.tone).join("|") !== expectedAshareTones.join("|") ||
+  ashareValue.accent !== expectedAshareTones[expectedAshareBand] ||
+  ashareValue.pill !== `性价比：${expectedAshareValues[expectedAshareBand]}`
+) {
+  throw new Error(`A-share rank mapping is invalid: ${JSON.stringify(ashareValue)}`);
+}
+
 // 6) 折线数据（指数卡 + 趋势卡都使用 1 年 Yahoo 日线）
 for (const key of ["sp500", "ndx", "gold", "treasury", "btc", "dollar"]) {
   const card = sentiment.cards[key];
@@ -122,8 +143,8 @@ if (!sentiment.displayDate) throw new Error(`Display date was not generated live
 if (!sentiment.sources?.length || !sentiment.generatedAt || typeof sentiment.latencyMs !== "number") {
   throw new Error(`Realtime metadata missing: ${JSON.stringify(sentiment)}`);
 }
-if (!Array.isArray(sentiment.strategy) || sentiment.strategy.length !== 3) {
-  throw new Error(`Expected 3 strategy cards (sp/ndx/btc), got ${sentiment.strategy?.length}`);
+if (!Array.isArray(sentiment.strategy) || sentiment.strategy.length !== 4 || sentiment.strategy.at(-1)?.key !== "ashare") {
+  throw new Error(`Expected 4 strategy cards (sp/ndx/btc/ashare), got ${JSON.stringify(sentiment.strategy)}`);
 }
 
 // 前端不得残留写死的截图数值
@@ -145,12 +166,15 @@ page.on("console", (message) => {
   if (message.type() === "error") errors.push(message.text());
 });
 page.on("pageerror", (error) => errors.push(error.message));
+await page.route("**/_vercel/insights/script.js", (route) =>
+  route.fulfill({ status: 200, contentType: "application/javascript", body: "" })
+);
 
 await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(
   () =>
-    document.querySelectorAll(".card").length === 12 &&
-    document.querySelectorAll(".source-note").length >= 12 &&
+    document.querySelectorAll(".card").length === 13 &&
+    document.querySelectorAll(".source-note").length >= 13 &&
     !document.body.textContent.includes("正在获取实时市场数据"),
   undefined,
   { timeout: 20000 }
@@ -214,17 +238,20 @@ const requiredPageText = [
   "BTC",
   "MVRV",
   "美元指数",
+  "A股性价比",
+  "前0%-10%",
+  "前90%-100%",
   "今日定投策略"
 ];
 const missingText = requiredPageText.filter((text) => !desktop.text.includes(text));
 if (missingText.length) {
   throw new Error(`Rendered page is missing expected live labels: ${missingText.join(", ")}`);
 }
-if (desktop.cards !== 12 || mobile.cards !== 12) {
-  throw new Error(`Expected 12 content cards, got ${desktop.cards}/${mobile.cards}`);
+if (desktop.cards !== 13 || mobile.cards !== 13) {
+  throw new Error(`Expected 13 content cards, got ${desktop.cards}/${mobile.cards}`);
 }
-if (desktop.strategyCards !== 3 || mobile.strategyCards !== 3) {
-  throw new Error(`Expected 3 strategy cards, got ${desktop.strategyCards}/${mobile.strategyCards}`);
+if (desktop.strategyCards !== 4 || mobile.strategyCards !== 4) {
+  throw new Error(`Expected 4 strategy cards, got ${desktop.strategyCards}/${mobile.strategyCards}`);
 }
 if (desktop.trendCards !== 4) {
   throw new Error(`Expected 4 trend cards (gold/treasury/btc/dollar), got ${desktop.trendCards}`);
@@ -232,7 +259,7 @@ if (desktop.trendCards !== 4) {
 if (desktop.drawdowns !== 2) {
   throw new Error(`Expected 2 drawdown rows (sp500/ndx), got ${desktop.drawdowns}`);
 }
-if (desktop.sourceNotes < 12) {
+if (desktop.sourceNotes < 13) {
   throw new Error(`Expected source notes on every card, got ${desktop.sourceNotes}`);
 }
 if (desktop.canvasCount < 6 || desktop.paintedCanvas.some((count) => count < 100)) {

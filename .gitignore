@@ -2,3 +2,7 @@
 node_modules/
 .DS_Store
 nohup.out
+dashboard-desktop.png
+dashboard-mobile.png
+verify-fixture-desktop.png
+verify-fixture-mobile.png

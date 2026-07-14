@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "verify:fixture": "node scripts/verify-fixture.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

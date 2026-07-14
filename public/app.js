@@ -56,7 +56,8 @@ function renderDashboard(payload) {
     payload.cards.treasury,
     payload.cards.btc,
     payload.cards.btcMvrv,
-    payload.cards.dollar
+    payload.cards.dollar,
+    payload.cards.ashareValue
   ].filter(Boolean);
 
   grid.innerHTML = orderedCards.map(renderCard).join("");
@@ -68,9 +69,38 @@ function renderCard(card) {
   const accentStyle = `style="--accent:${colors[card.accent] ?? card.accent}"`;
   if (card.kind === "index") return renderIndex(card, accentStyle);
   if (card.kind === "band") return renderBand(card, accentStyle);
+  if (card.kind === "rank") return renderRank(card, accentStyle);
   if (card.kind === "fear") return renderFear(card, accentStyle);
   if (card.kind === "trend") return renderTrend(card, accentStyle);
   return renderMini(card, accentStyle);
+}
+
+function renderRank(card, accentStyle) {
+  return `
+    <article class="card band-card rank-card ${card.isLive ? "" : "unavailable"}" ${accentStyle}>
+      <div class="accent-bar"></div>
+      <h2>${escapeHtml(card.title)}</h2>
+      <p class="sub">${escapeHtml(card.subtitle)}</p>
+      <div class="rank-summary">
+        <span>当前排名</span>
+        <strong>前 ${formatNumber(card.value, 2)}%</strong>
+      </div>
+      <div class="state-pill"><b>${escapeHtml(card.pill)}</b><span>${escapeHtml(card.pillEn)}</span></div>
+      <div class="rank-table">
+        <div class="rank-row head"><span>排名</span><span>性价比</span></div>
+        ${card.rows
+          .map(
+            (row, index) => `
+              <div class="rank-row ${index === card.active ? "active" : ""}" style="--rank-color:${colors[row.tone] ?? colors.red}">
+                <span>${escapeHtml(row.rank)}</span><strong>${escapeHtml(row.value)}</strong>
+              </div>
+            `
+          )
+          .join("")}
+      </div>
+      ${renderSource(card)}
+    </article>
+  `;
 }
 
 function renderIndex(card, accentStyle) {

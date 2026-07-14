@@ -79,6 +79,11 @@ globalThis.fetch = async (input, init) => {
   if (url.includes("home.treasury.gov")) return textResponse(treasuryXml);
   if (url.includes("dataviz.cnn.io")) return jsonResponse({ fear_and_greed: { score: 25.54, rating: "fear", timestamp: now } });
   if (url.includes("bitcoin-data.com")) return jsonResponse({ d: "2026-06-25", unixTs: 1782345600, mvrvZscore: 0.2678 });
+  if (url.includes("data.howbuy.com")) {
+    return textResponse(
+      'cb({"code":"0000","body":{"dqxjbCode":"5","pe":"14.46","dqxjb":"低","fedfwz":"90.34","gxl":"2.67","gxlfwz":"37.24"},"desc":"成功"});'
+    );
+  }
   if (url.includes("historyofmarket.com")) {
     // 120 个点的历史(≥ 阈值)以便算 forward 百分位;trailing 会被 Siblis 覆盖
     const hist = (base, span) => Array.from({ length: 120 }, (_, i) => ({ value: base + (i / 119) * span }));
@@ -144,7 +149,7 @@ const fail = (msg) => {
   throw new Error(`API CHECK FAILED: ${msg}`);
 };
 
-const expected = ["sp500", "ndx", "vix", "vxn", "spRsi", "ndxRsi", "fearGreed", "gold", "treasury", "btc", "btcMvrv", "dollar"];
+const expected = ["sp500", "ndx", "vix", "vxn", "spRsi", "ndxRsi", "fearGreed", "gold", "treasury", "btc", "btcMvrv", "dollar", "ashareValue"];
 for (const k of expected) if (!cards[k]) fail(`missing card ${k}`);
 if (cards.playbook) fail("playbook card should be merged away");
 
@@ -176,7 +181,13 @@ if (Math.abs(ndxc.peRank - 50) > 1) fail(`ndx trailing percentile expected ~50, 
 if (!/^近\d+年分位$/.test(ndxc.peRankLabel || "")) fail(`ndx peRankLabel should be 近N年分位, got ${ndxc.peRankLabel}`);
 if (typeof ndxc.forwardRank !== "number") fail(`ndx forward PE percentile missing, got ${ndxc.forwardRank}`);
 if (cards.btcMvrv.kind !== "band" || Math.abs(cards.btcMvrv.value - 0.2678) > 1e-6) fail("btcMvrv card wrong");
-if (data.strategy?.length !== 3 || data.strategy[2].key !== "btc") fail("strategy should have sp/ndx/btc");
+if (cards.ashareValue.kind !== "rank" || cards.ashareValue.value !== 90.34 || cards.ashareValue.pill !== "性价比：低") {
+  fail(`ashareValue card wrong: ${JSON.stringify(cards.ashareValue)}`);
+}
+if (cards.ashareValue.rows?.map((row) => row.tone).join("|") !== "green|blue|yellow|orange|red") {
+  fail(`ashareValue tones wrong: ${JSON.stringify(cards.ashareValue.rows)}`);
+}
+if (data.strategy?.length !== 4 || data.strategy[3].key !== "ashare") fail("strategy should have sp/ndx/btc/ashare");
 
 console.log("API OK:", JSON.stringify({
   status: data.status,
@@ -209,10 +220,13 @@ const page = await browser.newPage({ viewport: { width: 1125, height: 2600 }, de
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(e.message));
+await page.route("**/_vercel/insights/script.js", (route) =>
+  route.fulfill({ status: 200, contentType: "application/javascript", body: "" })
+);
 
 await page.goto(`http://localhost:${PORT}`, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(
-  () => document.querySelectorAll(".card").length === 12 && !document.body.textContent.includes("正在获取实时市场数据"),
+  () => document.querySelectorAll(".card").length === 13 && !document.body.textContent.includes("正在获取实时市场数据"),
   undefined,
   { timeout: 20000 }
 );
@@ -245,13 +259,13 @@ await browser.close();
 const dfail = (msg) => {
   throw new Error(`DOM CHECK FAILED: ${msg}`);
 };
-if (dom.cards !== 12) dfail(`cards ${dom.cards}`);
+if (dom.cards !== 13) dfail(`cards ${dom.cards}`);
 if (dom.trendCards !== 4) dfail(`trendCards ${dom.trendCards}`);
 if (dom.drawdowns !== 2) dfail(`drawdown rows ${dom.drawdowns}`);
 if (dom.alerts !== 1) dfail(`expected exactly 1 加仓提示 badge, got ${dom.alerts}`);
-if (dom.strategy !== 3) dfail(`strategy cards ${dom.strategy}`);
+if (dom.strategy !== 4) dfail(`strategy cards ${dom.strategy}`);
 if (dom.fearPlaybookRows < 5) dfail(`merged fear card playbook rows ${dom.fearPlaybookRows}`);
-for (const t of ["近1年回撤 DD", "提示加仓", "美元指数", "MVRV", "FEAR & GREED", "PRICE TREND"]) {
+for (const t of ["近1年回撤 DD", "提示加仓", "美元指数", "MVRV", "FEAR & GREED", "PRICE TREND", "A股性价比", "前90%-100%"]) {
   if (!dom.text.includes(t)) dfail(`missing text: ${t}`);
 }
 if (dom.painted.some((p) => p < 100)) dfail(`unpainted canvas: ${JSON.stringify(dom.painted)}`);
