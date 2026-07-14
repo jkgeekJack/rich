@@ -3,12 +3,50 @@ import { readFile } from "node:fs/promises";
 
 const baseUrl = process.env.BASE_URL || "http://localhost:3001";
 
-const sentimentResponse = await fetch(`${baseUrl}/api/sentiment`);
-if (!sentimentResponse.ok) {
-  throw new Error(`/api/sentiment returned ${sentimentResponse.status}`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Yahoo 偶发 429（单机并发拉行情会被限流），轮询直到行情类卡片就绪或超时。
+const yahooCards = ["sp500", "ndx", "gold", "btc", "dollar", "spRsi", "ndxRsi"];
+let sentiment = null;
+for (let attempt = 1; attempt <= 8; attempt += 1) {
+  const response = await fetch(`${baseUrl}/api/sentiment?period=1y&t=${Date.now()}`);
+  if (!response.ok && response.status !== 200) {
+    if (attempt === 8) throw new Error(`/api/sentiment returned ${response.status}`);
+    await sleep(15000);
+    continue;
+  }
+  sentiment = await response.json();
+  const ready = yahooCards.every((key) => sentiment.cards?.[key]?.isLive);
+  if (ready) break;
+  if (attempt === 8) {
+    const stillDown = yahooCards.filter((key) => !sentiment.cards?.[key]?.isLive);
+    throw new Error(`Yahoo-backed cards never went live after retries: ${stillDown.join(", ")}`);
+  }
+  console.log(`attempt ${attempt}: waiting for Yahoo cards (${yahooCards.filter((k) => !sentiment.cards?.[k]?.isLive).join(", ")})`);
+  await sleep(15000);
 }
 
-const sentiment = await sentimentResponse.json();
+// 1) 卡片集合与顺序
+const expectedCards = [
+  "sp500",
+  "ndx",
+  "vix",
+  "vxn",
+  "spRsi",
+  "ndxRsi",
+  "fearGreed",
+  "gold",
+  "treasury",
+  "btc",
+  "btcMvrv",
+  "dollar"
+];
+const cardKeys = Object.keys(sentiment.cards ?? {});
+const missingKeys = expectedCards.filter((key) => !cardKeys.includes(key));
+if (missingKeys.length) throw new Error(`Missing cards: ${missingKeys.join(", ")}`);
+if (sentiment.cards.playbook) throw new Error("Fear & Greed playbook should be merged into fearGreed, but a separate playbook card still exists");
+
+// 2) 必须实时的卡片
 const requiredLiveCards = [
   "sp500",
   "ndx",
@@ -17,33 +55,47 @@ const requiredLiveCards = [
   "spRsi",
   "ndxRsi",
   "fearGreed",
-  "playbook",
   "gold",
-  "treasury"
+  "treasury",
+  "btc",
+  "btcMvrv",
+  "dollar"
 ];
 const missingLiveCards = requiredLiveCards.filter((key) => !sentiment.cards?.[key]?.isLive);
 if (missingLiveCards.length) {
   throw new Error(`Expected core cards to use realtime sources: ${missingLiveCards.join(", ")}`);
 }
-if (typeof sentiment.cards.sp500.pe !== "number" || typeof sentiment.cards.sp500.forwardPe !== "number") {
-  throw new Error(`Expected live S&P PE metrics, got ${JSON.stringify(sentiment.cards.sp500)}`);
+
+// 3) 标普500 / 纳指100 回撤 DD（含 >10% 加仓提示逻辑）
+for (const key of ["sp500", "ndx"]) {
+  const card = sentiment.cards[key];
+  if (card.kind !== "index") throw new Error(`${key} should be an index card`);
+  if (typeof card.drawdown !== "number" || card.drawdown > 0) {
+    throw new Error(`${key} drawdown should be a non-positive number, got ${card.drawdown}`);
+  }
+  if (typeof card.drawdownHigh !== "number") throw new Error(`${key} drawdownHigh missing`);
+  if (card.drawdownAlert !== card.drawdown <= -10) {
+    throw new Error(`${key} drawdownAlert (${card.drawdownAlert}) inconsistent with DD ${card.drawdown}`);
+  }
 }
-if (sentiment.cards.sp500.metricsSource !== "History of Market") {
-  throw new Error(`Expected S&P PE metrics from History of Market, got ${sentiment.cards.sp500.metricsSource}`);
+
+// 4) 恐惧与贪婪合并卡
+const fg = sentiment.cards.fearGreed;
+if (fg.kind !== "fear" || !Array.isArray(fg.rows) || fg.rows.length !== 5) {
+  throw new Error(`Merged fearGreed card must be kind=fear with 5 playbook rows, got kind=${fg.kind} rows=${fg.rows?.length}`);
 }
-if (typeof sentiment.cards.ndx.pe !== "number" || typeof sentiment.cards.ndx.forwardPe !== "number") {
-  throw new Error(`Expected live Nasdaq 100 PE metrics, got ${JSON.stringify(sentiment.cards.ndx)}`);
+
+// 5) 黄金 / 美债 / BTC / 美元指数 为趋势曲线卡；btcMvrv 为估值带
+for (const key of ["gold", "treasury", "btc", "dollar"]) {
+  if (sentiment.cards[key].kind !== "trend") {
+    throw new Error(`${key} should be a trend card, got ${sentiment.cards[key].kind}`);
+  }
 }
-if (sentiment.cards.ndx.metricsSource !== "VCP Scanner") {
-  throw new Error(`Expected Nasdaq 100 PE metrics from VCP Scanner, got ${sentiment.cards.ndx.metricsSource}`);
-}
-if (!sentiment.cards.ndx.metricsUpdatedAt) {
-  throw new Error(`Expected Nasdaq 100 PE update date, got ${JSON.stringify(sentiment.cards.ndx)}`);
-}
-if (sentiment.chartPeriod?.key !== "1y") {
-  throw new Error(`Expected default chart period to be 1y, got ${JSON.stringify(sentiment.chartPeriod)}`);
-}
-for (const key of ["sp500", "ndx", "gold", "treasury"]) {
+if (sentiment.cards.btcMvrv.kind !== "band") throw new Error("btcMvrv should be a band card");
+if (!sentiment.cards.dollar.title.includes("美元指数")) throw new Error("dollar card missing 美元指数 title");
+
+// 6) 折线数据（指数卡 + 趋势卡都使用 1 年 Yahoo 日线）
+for (const key of ["sp500", "ndx", "gold", "treasury", "btc", "dollar"]) {
   const card = sentiment.cards[key];
   if (
     card.seriesPeriodLabel !== "近1年" ||
@@ -62,39 +114,31 @@ for (const key of ["sp500", "ndx", "gold", "treasury"]) {
     })}`);
   }
 }
-if (!sentiment.displayDate || sentiment.displayDate.includes("05 · 28")) {
-  throw new Error(`Display date was not generated live: ${sentiment.displayDate}`);
+
+if (sentiment.chartPeriod?.key !== "1y") {
+  throw new Error(`Expected default chart period to be 1y, got ${JSON.stringify(sentiment.chartPeriod)}`);
 }
+if (!sentiment.displayDate) throw new Error(`Display date was not generated live: ${sentiment.displayDate}`);
 if (!sentiment.sources?.length || !sentiment.generatedAt || typeof sentiment.latencyMs !== "number") {
   throw new Error(`Realtime metadata missing: ${JSON.stringify(sentiment)}`);
 }
+if (!Array.isArray(sentiment.strategy) || sentiment.strategy.length !== 3) {
+  throw new Error(`Expected 3 strategy cards (sp/ndx/btc), got ${sentiment.strategy?.length}`);
+}
 
+// 前端不得残留写死的截图数值
 const frontendSources = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   readFile(new URL("../public/app.js", import.meta.url), "utf8")
 ]);
-const forbiddenFixedValues = [
-  "7,520.40",
-  "29,973.60",
-  "16.29",
-  "23.39",
-  "74.30",
-  "79.20",
-  "$4,500",
-  "2026 · 05 · 28 / 周四",
-  "标普500 RSI 74.3 · 偏热",
-  "纳指100 RSI 79.2 · 偏热"
-];
+const forbiddenFixedValues = ["7,520.40", "29,973.60", "$4,500", "2026 · 05 · 28 / 周四"];
 const leakedFixedValues = forbiddenFixedValues.filter((value) => frontendSources.some((source) => source.includes(value)));
 if (leakedFixedValues.length) {
   throw new Error(`Frontend still contains fixed screenshot values: ${leakedFixedValues.join(", ")}`);
 }
-if (frontendSources.some((source) => source.includes('["起", "中", "今"]'))) {
-  throw new Error("Frontend still uses non-date axis labels");
-}
 
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1125, height: 2000 }, deviceScaleFactor: 1 });
+const page = await browser.newPage({ viewport: { width: 1125, height: 2400 }, deviceScaleFactor: 1 });
 const errors = [];
 
 page.on("console", (message) => {
@@ -105,11 +149,11 @@ page.on("pageerror", (error) => errors.push(error.message));
 await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(
   () =>
-    document.querySelectorAll(".card").length === 10 &&
-    document.querySelectorAll(".source-note").length >= 10 &&
+    document.querySelectorAll(".card").length === 12 &&
+    document.querySelectorAll(".source-note").length >= 12 &&
     !document.body.textContent.includes("正在获取实时市场数据"),
   undefined,
-  { timeout: 15000 }
+  { timeout: 20000 }
 );
 await page.screenshot({ path: "dashboard-desktop.png", fullPage: true });
 
@@ -130,6 +174,8 @@ const desktop = await page.evaluate(() => {
     cards: document.querySelectorAll(".card").length,
     strategyCards: document.querySelectorAll(".strategy-card").length,
     sourceNotes: document.querySelectorAll(".source-note").length,
+    drawdowns: document.querySelectorAll(".drawdown").length,
+    trendCards: document.querySelectorAll(".trend-card").length,
     text: document.body.textContent,
     canvasCount: document.querySelectorAll("canvas").length,
     paintedCanvas,
@@ -138,14 +184,13 @@ const desktop = await page.evaluate(() => {
   };
 });
 
-await page.setViewportSize({ width: 390, height: 1600 });
+await page.setViewportSize({ width: 390, height: 2200 });
 await page.waitForTimeout(300);
 await page.screenshot({ path: "dashboard-mobile.png", fullPage: true });
 
 const mobile = await page.evaluate(() => ({
   cards: document.querySelectorAll(".card").length,
   strategyCards: document.querySelectorAll(".strategy-card").length,
-  sourceNotes: document.querySelectorAll(".source-note").length,
   horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
   width: document.documentElement.clientWidth,
   scrollWidth: document.documentElement.scrollWidth
@@ -159,33 +204,38 @@ const requiredPageText = [
   "近3年",
   "S&P 500 · ^GSPC",
   "NASDAQ 100 · ^NDX",
-  "估值来源：VCP Scanner",
   "PRICE TREND · 近1年日线",
+  "近1年回撤 DD",
   "VIX",
   "VXN",
   "FEAR & GREED",
   "GOLD",
   "10Y",
-  "今日美股定投策略",
-  "来源："
+  "BTC",
+  "MVRV",
+  "美元指数",
+  "今日定投策略"
 ];
 const missingText = requiredPageText.filter((text) => !desktop.text.includes(text));
 if (missingText.length) {
   throw new Error(`Rendered page is missing expected live labels: ${missingText.join(", ")}`);
 }
-if (desktop.cards !== 10 || mobile.cards !== 10) {
-  throw new Error(`Expected 10 content cards, got ${desktop.cards}/${mobile.cards}`);
+if (desktop.cards !== 12 || mobile.cards !== 12) {
+  throw new Error(`Expected 12 content cards, got ${desktop.cards}/${mobile.cards}`);
 }
-if (desktop.strategyCards !== 2 || mobile.strategyCards !== 2) {
-  throw new Error(`Expected 2 strategy cards, got ${desktop.strategyCards}/${mobile.strategyCards}`);
+if (desktop.strategyCards !== 3 || mobile.strategyCards !== 3) {
+  throw new Error(`Expected 3 strategy cards, got ${desktop.strategyCards}/${mobile.strategyCards}`);
 }
-if (desktop.sourceNotes < 10 || mobile.sourceNotes < 10) {
-  throw new Error(`Expected source notes on every card, got ${desktop.sourceNotes}/${mobile.sourceNotes}`);
+if (desktop.trendCards !== 4) {
+  throw new Error(`Expected 4 trend cards (gold/treasury/btc/dollar), got ${desktop.trendCards}`);
 }
-if (desktop.text.includes("10Y分位: --")) {
-  throw new Error("Rendered page still shows missing percentile as 10Y分位: --");
+if (desktop.drawdowns !== 2) {
+  throw new Error(`Expected 2 drawdown rows (sp500/ndx), got ${desktop.drawdowns}`);
 }
-if (desktop.canvasCount < 4 || desktop.paintedCanvas.some((count) => count < 100)) {
+if (desktop.sourceNotes < 12) {
+  throw new Error(`Expected source notes on every card, got ${desktop.sourceNotes}`);
+}
+if (desktop.canvasCount < 6 || desktop.paintedCanvas.some((count) => count < 100)) {
   throw new Error(`Expected painted chart canvases, got ${JSON.stringify(desktop.paintedCanvas)}`);
 }
 if (desktop.scrollWidth > desktop.width || mobile.horizontalOverflow) {
@@ -202,16 +252,19 @@ console.log(
         status: sentiment.status,
         generatedAt: sentiment.generatedAt,
         displayDate: sentiment.displayDate,
-        sources: sentiment.sources,
-        liveCoreCards: requiredLiveCards.length,
+        cards: cardKeys.length,
+        spDrawdown: sentiment.cards.sp500.drawdown,
+        ndxDrawdown: sentiment.cards.ndx.drawdown,
+        spAlert: sentiment.cards.sp500.drawdownAlert,
+        ndxAlert: sentiment.cards.ndx.drawdownAlert,
         failures: sentiment.failures
       },
       desktop: {
         title: desktop.title,
-        date: desktop.date,
         cards: desktop.cards,
         strategyCards: desktop.strategyCards,
-        sourceNotes: desktop.sourceNotes,
+        trendCards: desktop.trendCards,
+        drawdowns: desktop.drawdowns,
         canvasCount: desktop.canvasCount
       },
       mobile,

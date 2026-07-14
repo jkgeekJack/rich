@@ -279,6 +279,57 @@ h2 {
   margin-top: 6px;
 }
 
+.drawdown {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 2px 0 6px;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.drawdown span {
+  color: var(--muted);
+}
+
+.drawdown b {
+  color: var(--ink);
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+}
+
+.drawdown i {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drawdown.alert b {
+  color: var(--red);
+}
+
+.drawdown .dd-alert {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #ffffff;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* 趋势曲线卡：复用指数卡的版式 */
+.trend-card {
+  min-height: 300px;
+}
+
+.trend-card .big-number {
+  margin-top: 6px;
+  font-size: clamp(40px, 4.6vw, 52px);
+}
+
 .band-card {
   min-height: 356px;
 }
@@ -381,6 +432,19 @@ h2 {
 .fear-card,
 .playbook-card {
   min-height: 292px;
+}
+
+/* 合并后的恐惧与贪婪卡同时包含仪表盘和操作手册，需要更高 */
+.fear-card {
+  min-height: 470px;
+}
+
+.fear-card .fear-scale {
+  margin-top: 20px;
+}
+
+.fear-card .playbook-table {
+  margin-top: 18px;
 }
 
 .fear-number {
@@ -515,10 +579,6 @@ h2 {
 
 .strategy-card.btc {
   color: var(--orange);
-}
-
-.strategy-card.ashare {
-  color: var(--red);
 }
 
 .mini-copy {

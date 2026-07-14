@@ -51,12 +51,12 @@ function renderDashboard(payload) {
     payload.cards.spRsi,
     payload.cards.ndxRsi,
     payload.cards.fearGreed,
-    payload.cards.playbook,
+    // 趋势曲线卡统一放在底部
     payload.cards.gold,
     payload.cards.treasury,
     payload.cards.btc,
     payload.cards.btcMvrv,
-    payload.cards.ashareValue
+    payload.cards.dollar
   ].filter(Boolean);
 
   grid.innerHTML = orderedCards.map(renderCard).join("");
@@ -69,7 +69,7 @@ function renderCard(card) {
   if (card.kind === "index") return renderIndex(card, accentStyle);
   if (card.kind === "band") return renderBand(card, accentStyle);
   if (card.kind === "fear") return renderFear(card, accentStyle);
-  if (card.kind === "playbook") return renderPlaybook(card, accentStyle);
+  if (card.kind === "trend") return renderTrend(card, accentStyle);
   return renderMini(card, accentStyle);
 }
 
@@ -84,9 +84,10 @@ function renderIndex(card, accentStyle) {
       <p class="sub">${escapeHtml(card.subtitle)}</p>
       <strong class="big-number">${formatNumber(card.value, 2)}</strong>
       <p class="move ${card.badgeTone}">${formatSignedMoney(card.change)} · ${escapeHtml(card.moveLabel)}</p>
+      ${renderDrawdown(card)}
       <div class="metrics">
-        ${renderMetricLine("PE", card.pe, card.peRank, card)}
-        ${typeof card.forwardPe === "number" ? renderMetricLine("Fwd", card.forwardPe, card.forwardRank, card) : ""}
+        ${renderMetricLine("PE", card.pe, card.peRank, card, card.peRankLabel)}
+        ${typeof card.forwardPe === "number" ? renderMetricLine("Fwd", card.forwardPe, card.forwardRank, card, card.forwardRankLabel) : ""}
       </div>
       <div class="metrics-source">${escapeHtml(formatMetricSource(card))}</div>
       <div class="trend-label">PRICE TREND · ${escapeHtml(card.seriesPeriodLabel ?? "当日")}日线 · ${escapeHtml(card.seriesSource ?? card.source ?? "不可用")}</div>
@@ -102,7 +103,7 @@ function renderBand(card, accentStyle) {
       <div class="accent-bar"></div>
       <h2>${escapeHtml(card.title)}</h2>
       <p class="sub">${escapeHtml(card.subtitle)}</p>
-      <strong class="center-number">${formatNumber(card.value, 2)}${card.valueSuffix ? escapeHtml(card.valueSuffix) : ""}</strong>
+      <strong class="center-number">${formatNumber(card.value, 2)}</strong>
       <div class="state-pill"><b>${escapeHtml(card.pill)}</b><span>${escapeHtml(card.pillEn)}</span></div>
       <div class="band-table">
         ${card.rows
@@ -135,20 +136,9 @@ function renderFear(card, accentStyle) {
         </div>
         <div class="scale-labels"><span>0-24</span><span>25-44</span><span>45-55</span><span>56-75</span><span>76-100</span></div>
       </div>
-      ${renderSource(card)}
-    </article>
-  `;
-}
-
-function renderPlaybook(card, accentStyle) {
-  return `
-    <article class="card playbook-card fg ${card.isLive ? "" : "unavailable"}" ${accentStyle}>
-      <div class="accent-bar yellow"></div>
-      <h2>${escapeHtml(card.title)}</h2>
-      <p class="sub">${escapeHtml(card.subtitle)}</p>
       <div class="playbook-table">
         <div class="play-row head"><span>区间</span><span>情绪</span><span>策略</span></div>
-        ${card.rows
+        ${(card.rows ?? [])
           .map(
             (row, index) => `
               <div class="play-row ${index === card.active ? "active" : ""}">
@@ -162,6 +152,44 @@ function renderPlaybook(card, accentStyle) {
       </div>
       ${renderSource(card)}
     </article>
+  `;
+}
+
+// 黄金 / 美债 / BTC / 美元指数：与标普500同款趋势曲线卡。
+function renderTrend(card, accentStyle) {
+  const color = colors[card.accent] ?? card.accent;
+  return `
+    <article class="card trend-card ${card.isLive ? "" : "unavailable"}" ${accentStyle}>
+      <div class="accent-bar"></div>
+      <div class="title-row">
+        <h2>${escapeHtml(card.title)}</h2>
+        <span class="change-badge ${card.badgeTone}">${escapeHtml(card.badge)}</span>
+      </div>
+      <p class="sub">${escapeHtml(card.subtitle)}</p>
+      <strong class="big-number">${formatValue(card.value, card.valueFormat)}</strong>
+      <p class="move ${card.badgeTone}">${escapeHtml(card.moveLabel)}</p>
+      <div class="trend-label">PRICE TREND · ${escapeHtml(card.seriesPeriodLabel ?? "当日")}日线 · ${escapeHtml(card.seriesSource ?? card.source ?? "不可用")}</div>
+      <canvas class="trend-canvas" width="440" height="112" data-marker="true" data-color="${color}" data-series="${seriesData(card.series)}" data-labels="${labelData(card.seriesLabels)}"></canvas>
+      ${renderSource(card)}
+    </article>
+  `;
+}
+
+// 近 1 年回撤（DD），DD 超过 10% 时显示加仓提示。
+function renderDrawdown(card) {
+  if (typeof card.drawdown !== "number") return "";
+  const ddText = `${card.drawdown.toFixed(2)}%`;
+  const highText = typeof card.drawdownHigh === "number" ? `距1年高点 ${formatNumber(card.drawdownHigh, 2)}` : "";
+  const alert = card.drawdownAlert
+    ? `<em class="dd-alert">DD &gt; 10% · 提示加仓</em>`
+    : "";
+  return `
+    <div class="drawdown ${card.drawdownAlert ? "alert" : ""}">
+      <span>近1年回撤 DD</span>
+      <b>${ddText}</b>
+      ${alert}
+      <i>${escapeHtml(highText)}</i>
+    </div>
   `;
 }
 
@@ -218,10 +246,10 @@ function formatMetricSource(card) {
   return `估值来源：${card.metricsSource}${date}`;
 }
 
-function renderMetricLine(label, value, rank, card) {
+function renderMetricLine(label, value, rank, card, rankLabel) {
   const detail =
     typeof rank === "number"
-      ? `| 10Y分位: ${formatPercent(rank)}`
+      ? `| ${rankLabel || "10Y分位"}: ${formatPercent(rank)}`
       : `| ${formatCompactMetricSource(card)}`;
   return `<p><span>${escapeHtml(label)}</span> <b>${formatNumber(value, 1)}</b> <em>${escapeHtml(detail)}</em> <i>·</i></p>`;
 }
