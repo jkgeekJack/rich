@@ -1,6 +1,22 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import YahooFinance from "yahoo-finance2";
+
+// yahoo-finance2 会自动处理 cookie/crumb 鉴权，比裸调 chart 接口更稳、能绕过裸接口的 429。
+const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey", "ripHistorical"] });
+
+// range 字符串 → period1 起始日期
+function rangeToPeriod1(range) {
+  const days = { "5d": 7, "1mo": 31, "3mo": 93, "6mo": 186, "1y": 368, "2y": 735, "3y": 1100, "5y": 1830 }[range] ?? 368;
+  return new Date(Date.now() - days * 86_400_000);
+}
+
+// chart 数据获取，默认走 yahoo-finance2；测试可通过 globalThis.__INVEST_CHART_PROVIDER__ 注入固定数据。
+function fetchChart(symbol, options) {
+  const provider = globalThis.__INVEST_CHART_PROVIDER__ ?? yahooFinance.chart.bind(yahooFinance);
+  return provider(symbol, options);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,11 +56,36 @@ const chartRequestTimeoutMs = 4_000;
 const newsRequestTimeoutMs = 8_000;
 let newsCache = { fetchedAt: 0, data: [] };
 const sentimentCache = new Map();
-const sentimentCacheTtlMs = 60_000;
+const sentimentCacheTtlMs = Number(process.env.SENTIMENT_TTL_MS) || 60_000;
+// stale-while-revalidate：保存每个周期最近一次成功的卡片/策略，
+// 当 Yahoo 等数据源临时 429 时回填上一次的好值，避免卡片显示「实时源不可用」。
+const lastGoodSentiment = new Map();
 const chartPeriods = {
   "1y": { key: "1y", label: "近1年", yahooRange: "1y", maxPoints: 140 },
   "3y": { key: "3y", label: "近3年", yahooRange: "3y", maxPoints: 180 }
 };
+
+// Yahoo Finance 限流：同一 IP 并发拉多个 symbol 容易触发 429，限制并发数并排队。
+const YAHOO_MAX_CONCURRENT = 2;
+let yahooActive = 0;
+const yahooQueue = [];
+function runYahoo(task) {
+  return new Promise((resolve, reject) => {
+    const start = () => {
+      yahooActive += 1;
+      Promise.resolve()
+        .then(task)
+        .then(resolve, reject)
+        .finally(() => {
+          yahooActive -= 1;
+          const next = yahooQueue.shift();
+          if (next) next();
+        });
+    };
+    if (yahooActive < YAHOO_MAX_CONCURRENT) start();
+    else yahooQueue.push(start);
+  });
+}
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -205,39 +246,60 @@ async function loadSentimentSnapshot(periodKey = "1y") {
 
   const startedAt = Date.now();
   const failures = [];
-  const [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spPe, ndxPe, btc, mvrv, ashareValue] = await Promise.all([
-    fetchIndexQuote("^spx", "^GSPC", chartPeriod).catch((error) =>
-      failedValue(failures, "S&P 500", error)
-    ),
-    fetchIndexQuote("^ndx", "^NDX", chartPeriod).catch((error) =>
-      failedValue(failures, "NASDAQ 100", error)
-    ),
-    fetchIndexQuote("xauusd", "GC=F", chartPeriod).catch((error) =>
-      failedValue(failures, "XAU/USD", error)
-    ),
+  // Stooq 行情源已失效（^spx/^ndx/xauusd 返回 404），统一改用 Yahoo Finance 拉行情+折线。
+  // RSI 也从已失效的 nfin 切到 Yahoo。
+  const needSeparateHigh = chartPeriod.key !== "1y";
+  const [
+    sp500,
+    ndx,
+    gold,
+    vix,
+    vxn,
+    treasury,
+    fearGreed,
+    spRsi,
+    ndxRsi,
+    spPe,
+    ndxPe,
+    btc,
+    dxy,
+    mvrv,
+    ashareValue,
+    spHighRaw,
+    ndxHighRaw
+  ] = await Promise.all([
+    fetchYahooMarketQuote("^GSPC", chartPeriod).catch((error) => failedValue(failures, "S&P 500", error)),
+    fetchYahooMarketQuote("^NDX", chartPeriod).catch((error) => failedValue(failures, "NASDAQ 100", error)),
+    fetchYahooMarketQuote("GC=F", chartPeriod).catch((error) => failedValue(failures, "XAU/USD", error)),
     fetchCboeQuote("_VIX").catch((error) => failedValue(failures, "VIX", error)),
     fetchCboeQuote("_VXN").catch((error) => failedValue(failures, "VXN", error)),
     fetchTreasury10Year(chartPeriod).catch((error) => failedValue(failures, "10Y Treasury", error)),
     fetchCnnFearGreed().catch((error) => failedValue(failures, "CNN Fear & Greed", error)),
+    fetchYahooRsi("SPY").catch((error) => failedValue(failures, "S&P RSI", error)),
+    fetchYahooRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error)),
     fetchSp500Pe().catch((error) => failedValue(failures, "S&P PE", error)),
     fetchNasdaq100Pe().catch((error) => failedValue(failures, "Nasdaq 100 PE", error)),
-    fetchYahooQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC/USD", error)),
-    fetchMvrvZScore().catch((error) => failedValue(failures, "BTC MVRV Z-Score", error)),
-    fetchAshareValue().catch((error) => failedValue(failures, "A股性价比", error))
-  ]);
-  // RSI 优先从已拉取的历史序列计算（无额外请求），序列不足时才降级 nfin
-  const spRsiFromSeries = calcRsiFromQuote(sp500);
-  const ndxRsiFromSeries = calcRsiFromQuote(ndx);
-  const [spRsi, ndxRsi] = await Promise.all([
-    spRsiFromSeries
-      ? Promise.resolve(spRsiFromSeries)
-      : fetchNfinRsi("SPY").catch((error) => failedValue(failures, "S&P RSI", error)),
-    ndxRsiFromSeries
-      ? Promise.resolve(ndxRsiFromSeries)
-      : fetchNfinRsi("QQQ").catch((error) => failedValue(failures, "NDX RSI", error))
+    fetchYahooMarketQuote("BTC-USD", chartPeriod).catch((error) => failedValue(failures, "BTC", error)),
+    fetchYahooMarketQuote("DX-Y.NYB", chartPeriod).catch((error) => failedValue(failures, "US Dollar Index", error)),
+    fetchBtcMvrv().catch((error) => failedValue(failures, "BTC MVRV", error)),
+    fetchAshareValue().catch((error) => failedValue(failures, "A股性价比", error)),
+    needSeparateHigh ? fetchYearHigh("^GSPC").catch(() => null) : Promise.resolve(null),
+    needSeparateHigh ? fetchYearHigh("^NDX").catch(() => null) : Promise.resolve(null)
   ]);
 
-  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, mvrv, ashareValue].filter(
+  // 近 1 年最高点：1y 周期下直接用行情折线的高点，避免重复请求；3y 周期则单独取 1 年序列。
+  const spYearHigh = needSeparateHigh
+    ? spHighRaw
+    : sp500?.isLive
+      ? { high: sp500.high, isLive: true, source: "Yahoo Finance chart" }
+      : null;
+  const ndxYearHigh = needSeparateHigh
+    ? ndxHighRaw
+    : ndx?.isLive
+      ? { high: ndx.high, isLive: true, source: "Yahoo Finance chart" }
+      : null;
+
+  const liveCount = [sp500, ndx, gold, vix, vxn, treasury, fearGreed, spRsi, ndxRsi, spPe, ndxPe, btc, dxy, mvrv, ashareValue].filter(
     (item) => item?.isLive
   ).length;
   const snapshot = {
@@ -252,15 +314,14 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       source: "Yahoo Finance chart"
     },
     sources: [
-      "Stooq",
+      "Yahoo Finance",
       "Cboe delayed quotes",
       "US Treasury",
       "CNN Fear & Greed",
-      "nfin Nasdaq API",
       "History of Market",
       "VCP Scanner",
-      "好买基金 估值性价比",
-      "Yahoo Finance fallback"
+      "bitcoin-data.com",
+      "好买基金 估值性价比"
     ],
     failures,
     cards: {
@@ -270,7 +331,8 @@ async function loadSentimentSnapshot(periodKey = "1y") {
         subtitleLabel: "标普500",
         quote: sp500,
         pe: spPe,
-        accent: "green"
+        accent: "green",
+        yearHigh: spYearHigh
       }),
       ndx: buildIndexCard({
         key: "ndx",
@@ -278,7 +340,8 @@ async function loadSentimentSnapshot(periodKey = "1y") {
         subtitleLabel: "纳指100",
         quote: ndx,
         pe: ndxPe,
-        accent: "purple"
+        accent: "purple",
+        yearHigh: ndxYearHigh
       }),
       vix: buildVolatilityCard("VIX", "标普500波动率", vix, [
         [12, "极低波动", "控制追高"],
@@ -296,84 +359,80 @@ async function loadSentimentSnapshot(periodKey = "1y") {
       ]),
       spRsi: buildRsiCard("S&P RSI(14)", "标普500相对强弱 · RSI(14)", spRsi),
       ndxRsi: buildRsiCard("NDX RSI(14)", "纳指100相对强弱 · RSI(14)", ndxRsi),
+      // 恐惧与贪婪指数：仪表盘 + 操作手册合并为一张卡（kind: fear，含 rows）。
       fearGreed: buildFearGreedCard(fearGreed),
-      playbook: buildPlaybookCard(fearGreed),
-      gold: buildMiniCard("GOLD\nXAU/USD", "伦敦金 · 美元/\n盎司", gold, "currency"),
-      treasury: buildMiniCard("10Y\nUST ·\n^TNX", "十年期\n美国收益率", treasury, "percent"),
-      btc: buildMiniCard("BTC\nBTC/USD", "比特币 ·\n美元", btc, "currency0"),
-      btcMvrv: buildMvrvCard(mvrv),
+      // 黄金 / 十年期美债 / BTC / 美元指数：与标普500同款趋势曲线卡（kind: trend），放在卡片底部。
+      gold: buildTrendCard({
+        title: "GOLD · XAU/USD",
+        subtitle: "伦敦金 · 美元/盎司",
+        quote: gold,
+        accent: "yellow",
+        valueFormat: "currency",
+        badgeKind: "percent"
+      }),
+      treasury: buildTrendCard({
+        title: "10Y · UST · ^TNX",
+        subtitle: "十年期美国国债收益率",
+        quote: treasury,
+        accent: "blue",
+        valueFormat: "percent",
+        badgeKind: "basis"
+      }),
+      btc: buildTrendCard({
+        title: "BTC · BTC/USD",
+        subtitle: "比特币 · 美元",
+        quote: btc,
+        accent: "orange",
+        valueFormat: "currency0",
+        badgeKind: "percent"
+      }),
+      btcMvrv: buildBtcMvrvCard(mvrv),
+      dollar: buildTrendCard({
+        title: "DXY · 美元指数",
+        subtitle: "美元指数 · ICE U.S. Dollar",
+        quote: dxy,
+        accent: "#0f9488",
+        valueFormat: "number",
+        badgeKind: "percent"
+      }),
       ashareValue: buildAshareValueCard(ashareValue)
     },
     strategy: buildStrategy(spRsi, ndxRsi, mvrv, ashareValue)
   };
 
+  applyStaleWhileRevalidate(snapshot, chartPeriod.key);
+
   sentimentCache.set(chartPeriod.key, { fetchedAt: Date.now(), data: snapshot });
   return snapshot;
+}
+
+// 数据源临时失败时，用上一次成功的卡片/策略回填，保持页面有数据可看。
+function applyStaleWhileRevalidate(snapshot, periodKey) {
+  const store = lastGoodSentiment.get(periodKey) ?? { cards: new Map(), strategy: null };
+  for (const [key, card] of Object.entries(snapshot.cards)) {
+    if (card?.isLive) {
+      store.cards.set(key, card);
+    } else if (store.cards.has(key)) {
+      snapshot.cards[key] = { ...store.cards.get(key), stale: true };
+    }
+  }
+  const strategy = snapshot.strategy;
+  if (Array.isArray(strategy) && strategy.every((item) => item?.isLive)) {
+    store.strategy = strategy;
+  } else if (store.strategy) {
+    snapshot.strategy = store.strategy.map((item) => ({ ...item, stale: true }));
+  }
+  lastGoodSentiment.set(periodKey, store);
+
+  // 计入回填后的卡片重新计算状态
+  const cards = Object.values(snapshot.cards);
+  const liveCount = cards.filter((card) => card?.isLive).length;
+  snapshot.status = liveCount ? (liveCount === cards.length ? "live" : "partial") : "offline";
 }
 
 function failedValue(failures, symbol, error) {
   failures.push({ symbol, message: error.message });
   return { isLive: false, error: error.message, source: null };
-}
-
-async function fetchIndexQuote(stooqSymbol, yahooSymbol, chartPeriod = chartPeriods["1y"]) {
-  try {
-    return await fetchYahooQuote(yahooSymbol, chartPeriod);
-  } catch (yahooError) {
-    try {
-      return await fetchStooqQuote(stooqSymbol, "Stooq", yahooSymbol, chartPeriod);
-    } catch (stooqError) {
-      throw new Error(`Yahoo: ${yahooError.message}; Stooq: ${stooqError.message}`);
-    }
-  }
-}
-
-async function fetchYahooQuote(symbol, chartPeriod = chartPeriods["1y"]) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`;
-  const response = await fetchWithRetries(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0"
-    },
-    timeoutMs: quoteRequestTimeoutMs,
-    retries: 1,
-    retryDelayMs: 1500
-  });
-  if (!response.ok) throw new Error(`${symbol} Yahoo quote returned ${response.status}`);
-  const payload = await response.json();
-  const result = payload.chart?.result?.[0];
-  const meta = result?.meta;
-  const closes = (result?.indicators?.quote?.[0]?.close ?? []).filter(
-    (value) => typeof value === "number" && Number.isFinite(value)
-  );
-  const price = numberOrNull(meta?.regularMarketPrice) ?? (closes.length ? closes[closes.length - 1] : null);
-  if (price === null) throw new Error(`${symbol} returned no live quote`);
-  const previousClose = closes.length >= 2 ? closes[closes.length - 2] : numberOrNull(meta?.chartPreviousClose);
-  const change = previousClose === null ? null : price - previousClose;
-  const changePercent = previousClose ? (change / previousClose) * 100 : null;
-  const dayHigh = numberOrNull(meta?.regularMarketDayHigh);
-  const dayLow = numberOrNull(meta?.regularMarketDayLow);
-  const updatedAt = numberOrNull(meta?.regularMarketTime)
-    ? new Date(meta.regularMarketTime * 1000).toISOString()
-    : new Date().toISOString();
-  const historicalSeries = await fetchYahooHistoricalSeries(symbol, chartPeriod).catch(() => null);
-  return {
-    symbol: meta?.symbol ?? symbol,
-    name: meta?.longName ?? meta?.shortName ?? symbol,
-    price,
-    change,
-    changePercent,
-    open: previousClose,
-    high: dayHigh,
-    low: dayLow,
-    volume: numberOrNull(meta?.regularMarketVolume),
-    updatedAt,
-    source: "Yahoo Finance",
-    isLive: true,
-    series: historicalSeries?.values ?? buildQuoteSeries(previousClose, dayLow, dayHigh, price),
-    seriesLabels: historicalSeries?.labels ?? ["前收", "低点", "高点", "最新"],
-    seriesSource: historicalSeries?.source ?? "Yahoo Finance",
-    seriesPeriodLabel: historicalSeries?.periodLabel ?? "当日"
-  };
 }
 
 async function fetchStooqQuote(symbol, source, historySymbol = null, chartPeriod = chartPeriods["1y"]) {
@@ -394,9 +453,6 @@ async function fetchStooqQuote(symbol, source, historySymbol = null, chartPeriod
   const [, date, time, open, high, low, close, volume, name] = values;
   const price = Number(close);
   const openPrice = Number(open);
-  if (!Number.isFinite(price) || !Number.isFinite(openPrice)) {
-    throw new Error(`${symbol} Stooq returned a non-CSV response (likely bot challenge)`);
-  }
   const change = price - openPrice;
   const changePercent = openPrice ? (change / openPrice) * 100 : null;
   const historicalSeries = historySymbol
@@ -442,83 +498,14 @@ function parseCsvRow(row) {
   return values;
 }
 
-// MVRV Z-Score = (市值 − 已实现市值) / 市值标准差，日更指标。
-// bitcoin-data.com 免费档限 8 次/小时，独立长缓存并在源失败时回退旧值。
-const mvrvBands = [
-  [0, "历史底部区", "重仓买入"],
-  [2, "低估积累区", "坚持定投"],
-  [3.5, "合理偏高", "持有观察"],
-  [6, "牛市偏热", "分批止盈"],
-  [7, "顶部预警", "大幅减仓"],
-  [Infinity, "极度泡沫", "清仓离场"]
-];
-const mvrvBandsEn = ["BOTTOM ZONE", "ACCUMULATE", "FAIR-HIGH", "OVERHEATED", "TOP WARNING", "BUBBLE"];
-let mvrvCache = null;
-const mvrvCacheTtlMs = 3 * 60 * 60 * 1000;
-
-async function fetchMvrvZScore() {
-  if (mvrvCache && Date.now() - mvrvCache.fetchedAt < mvrvCacheTtlMs) return mvrvCache.data;
-  try {
-    const response = await fetchWithTimeout("https://bitcoin-data.com/v1/mvrv-zscore/last", {
-      timeoutMs: quoteRequestTimeoutMs,
-      headers: { Accept: "application/json" }
-    });
-    if (!response.ok) throw new Error(`MVRV bitcoin-data returned ${response.status}`);
-    const payload = await response.json();
-    const value = Number(payload.mvrvZscore);
-    if (!Number.isFinite(value)) throw new Error("MVRV returned no numeric value");
-    const data = { value, date: payload.d, source: "bitcoin-data.com", isLive: true };
-    mvrvCache = { fetchedAt: Date.now(), data };
-    return data;
-  } catch (error) {
-    if (mvrvCache?.data) return mvrvCache.data;
-    throw error;
-  }
-}
-
-function mvrvActiveIndex(value) {
-  return typeof value === "number" ? mvrvBands.findIndex(([limit]) => value < limit) : -1;
-}
-
-function buildMvrvCard(mvrv) {
-  const rows = mvrvBands.map((row, index) => ({
-    range:
-      index === 0
-        ? `< ${row[0]}`
-        : index === mvrvBands.length - 1
-          ? `> ${mvrvBands[index - 1][0]}`
-          : `${mvrvBands[index - 1][0]}-${row[0]}`,
-    mood: row[1],
-    action: row[2]
-  }));
-  const value = mvrv?.isLive ? numberOrNull(mvrv.value) : null;
-  const active = mvrvActiveIndex(value);
-  const row = active >= 0 ? mvrvBands[active] : null;
-  return {
-    kind: "band",
-    accent: "orange",
-    title: "BTC MVRV Z-Score",
-    subtitle: `比特币估值 · (市值−已实现市值)/市值标准差${mvrv?.date ? ` · ${mvrv.date}` : ""}`,
-    value,
-    pill: row?.[1] ?? "不可用",
-    pillEn: active >= 0 ? mvrvBandsEn[active] : "NO SOURCE",
-    active,
-    rows,
-    source: mvrv?.source ?? "bitcoin-data.com",
-    isLive: Boolean(mvrv?.isLive),
-    error: mvrv?.error ?? null
-  };
-}
-
 // A股性价比 = 好买“股债性价比”估值模型（沪深300），日更。
-// data.howbuy.com 公开 JSONP，无需签名/referer；time=1N 字段为空，固定取近3年(3N)。
-// dqxjbCode 1-5 从高到低映射性价比档位，越低越贵。
+// fedfwz 是近3年股债性价比排名分位，数值越小性价比越高。
 const ashareValueBands = [
-  ["高", "低位", "积极配置", "HIGH VALUE"],
-  ["较高", "偏低位", "逢低布局", "GOOD VALUE"],
-  ["适中", "适中", "均衡持有", "FAIR"],
-  ["较低", "偏高位", "谨慎控仓", "RICH"],
-  ["低", "高位", "落袋观望", "EXPENSIVE"]
+  { upperExclusive: 10, rank: "前0%-10%", value: "高", action: "积极配置", english: "HIGH VALUE", score: 2, tone: "green" },
+  { upperExclusive: 30, rank: "前10%-30%", value: "较高", action: "逢低布局", english: "GOOD VALUE", score: 1, tone: "blue" },
+  { upperExclusive: 70, rank: "前30%-70%", value: "中等", action: "均衡持有", english: "FAIR", score: 0, tone: "yellow" },
+  { upperExclusive: 90, rank: "前70%-90%", value: "较低", action: "谨慎控仓", english: "RICH", score: -1, tone: "orange" },
+  { upperExclusive: Infinity, rank: "前90%-100%", value: "低", action: "落袋观望", english: "EXPENSIVE", score: -2, tone: "red" }
 ];
 let ashareValueCache = null;
 const ashareValueCacheTtlMs = 3 * 60 * 60 * 1000;
@@ -540,39 +527,37 @@ async function fetchAshareValue() {
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) throw new Error("Howbuy 估值性价比 返回无法解析");
     const body = JSON.parse(match[0]).body ?? {};
-    const code = Number.parseInt(body.dqxjbCode, 10);
-    if (!Number.isFinite(code) || code < 1 || code > 5) {
-      throw new Error("Howbuy 估值性价比 缺少有效档位");
+    const fedRank = numberOrNull(Number.parseFloat(body.fedfwz));
+    if (fedRank === null || fedRank < 0 || fedRank > 100) {
+      throw new Error("Howbuy 估值性价比 缺少有效分位值");
     }
     const data = {
-      code,
       pe: numberOrNull(Number.parseFloat(body.pe)),
-      label: body.dqxjb || null,
-      step: body.step || null,
       dividendYield: numberOrNull(Number.parseFloat(body.gxl)),
       dividendRank: numberOrNull(Number.parseFloat(body.gxlfwz)),
-      fedRank: numberOrNull(Number.parseFloat(body.fedfwz)),
+      fedRank,
       source: "好买基金 data.howbuy.com",
       isLive: true
     };
     ashareValueCache = { fetchedAt: Date.now(), data };
     return data;
   } catch (error) {
-    if (ashareValueCache?.data) return ashareValueCache.data;
+    if (ashareValueCache?.data) return { ...ashareValueCache.data, stale: true };
     throw error;
   }
 }
 
+function ashareValueBandIndex(rank) {
+  if (typeof rank !== "number" || !Number.isFinite(rank) || rank < 0 || rank > 100) return -1;
+  return ashareValueBands.findIndex((band) => rank < band.upperExclusive);
+}
+
 function buildAshareValueCard(value) {
-  const rows = ashareValueBands.map((row) => ({
-    range: `性价比 ${row[0]}`,
-    mood: row[1],
-    action: row[2]
-  }));
-  const active = value?.isLive && value.code >= 1 && value.code <= 5 ? value.code - 1 : -1;
+  const rows = ashareValueBands.map((band) => ({ rank: band.rank, value: band.value, tone: band.tone }));
+  const fedRank = value?.isLive ? numberOrNull(value.fedRank) : null;
+  const active = ashareValueBandIndex(fedRank);
   const band = active >= 0 ? ashareValueBands[active] : null;
   const pe = numberOrNull(value?.pe);
-  const fedRank = numberOrNull(value?.fedRank);
   const dividend = numberOrNull(value?.dividendYield);
   const dividendRank = numberOrNull(value?.dividendRank);
   const detail = [];
@@ -585,32 +570,32 @@ function buildAshareValueCard(value) {
     );
   }
   return {
-    kind: "band",
-    accent: "red",
+    kind: "rank",
+    accent: band?.tone ?? "red",
     title: "A股性价比 · 沪深300",
-    subtitle: `好买股债性价比 · 近3年分位${detail.length ? ` · ${detail.join(" · ")}` : ""}`,
+    subtitle: `好买股债性价比 · 近3年${detail.length ? ` · ${detail.join(" · ")}` : ""}`,
     value: fedRank,
-    valueSuffix: fedRank !== null ? "%" : null,
-    pill: value?.isLive ? (value.label ?? band?.[0] ?? "不可用") : "不可用",
-    pillEn: active >= 0 ? ashareValueBands[active][3] : "NO SOURCE",
+    pill: band ? `性价比：${band.value}` : "不可用",
+    pillEn: band?.english ?? "NO SOURCE",
     active,
     rows,
     source: value?.source ?? "好买基金 data.howbuy.com",
     isLive: Boolean(value?.isLive),
+    stale: Boolean(value?.stale),
     error: value?.error ?? null
   };
 }
 
 function buildAshareStrategyItem(value) {
-  const active = value?.isLive && value.code >= 1 && value.code <= 5 ? value.code - 1 : -1;
+  const rank = value?.isLive ? numberOrNull(value.fedRank) : null;
+  const active = ashareValueBandIndex(rank);
   const band = active >= 0 ? ashareValueBands[active] : null;
-  const scores = [2, 1, 0, -1, -2];
   return {
     key: "ashare",
-    score: active >= 0 ? scores[active] : null,
-    action: band ? band[2] : "等待实时源",
+    score: band?.score ?? null,
+    action: band?.action ?? "等待实时源",
     detail: band
-      ? `沪深300 性价比${value.label ?? band[0]} · ${band[1]}`
+      ? `沪深300 排名前${rank.toFixed(2)}% · 性价比${band.value}`
       : "沪深300 估值性价比 · 实时源不可用",
     isLive: Boolean(value?.isLive)
   };
@@ -709,22 +694,15 @@ async function fetchYahooRsi(symbol) {
 }
 
 async function fetchNfinRsi(symbol) {
-  // ETF → 对应指数，避免 Yahoo Finance 对 ETF 429 限速
-  const yahooFallbackSymbol = { "SPY": "^GSPC", "QQQ": "^NDX" }[symbol] ?? symbol;
-  try {
-    const points = await fetchNfinHistoricalCloses(symbol);
-    if (points.length < 20) throw new Error(`${symbol} nfin returned insufficient RSI data`);
-    return {
-      value: calculateRsi(points.map((point) => point.value), 14),
-      change: calculateRsi(points.slice(0, -1).map((point) => point.value), 14),
-      updatedAt: points.at(-1).time,
-      source: "nfin Nasdaq API",
-      isLive: true
-    };
-  } catch (_) {
-    // nfin 不可达时降级到 Yahoo Finance RSI（用指数代码规避 ETF 429 限速）
-    return fetchYahooRsi(yahooFallbackSymbol);
-  }
+  const points = await fetchNfinHistoricalCloses(symbol);
+  if (points.length < 20) throw new Error(`${symbol} nfin returned insufficient RSI data`);
+  return {
+    value: calculateRsi(points.map((point) => point.value), 14),
+    change: calculateRsi(points.slice(0, -1).map((point) => point.value), 14),
+    updatedAt: points.at(-1).time,
+    source: "nfin Nasdaq API",
+    isLive: true
+  };
 }
 
 async function fetchNfinHistoricalCloses(symbol) {
@@ -748,91 +726,94 @@ async function fetchNfinHistoricalCloses(symbol) {
     .sort((a, b) => new Date(a.time) - new Date(b.time));
 }
 
-async function fetchSp500Pe() {
-  const response = await fetchWithRetries("https://historyofmarket.com/api/sp500/forward-pe.json", {
+// History of Market 同时提供 trailing/forward PE 与历史序列(可算百分位)。
+// 仅当历史点数足够(≥100)才算百分位,避免短历史被误标成「10Y分位」。
+const PE_PERCENTILE_MIN_POINTS = 100;
+async function fetchHistoryOfMarketPe(indexPath, label) {
+  const response = await fetchWithRetries(`https://historyofmarket.com/api/${indexPath}/forward-pe.json`, {
     timeoutMs: newsRequestTimeoutMs,
     retries: 2,
     retryDelayMs: 2500
   });
-  if (!response.ok) throw new Error(`History of Market S&P PE returned ${response.status}`);
+  if (!response.ok) throw new Error(`History of Market ${label} PE returned ${response.status}`);
   const payload = await response.json();
   const trailing = numberOrNull(payload.current?.trailing);
   const forward = numberOrNull(payload.current?.forward);
   if (typeof trailing !== "number" && typeof forward !== "number") {
-    throw new Error("History of Market returned no S&P PE data");
+    throw new Error(`History of Market returned no ${label} PE data`);
   }
+  const trailingHistory = Array.isArray(payload.trailing) ? payload.trailing : [];
+  const forwardHistory = Array.isArray(payload.forward) ? payload.forward : [];
   return {
     pe: trailing,
     forwardPe: forward,
-    peRank: percentileRank(payload.trailing, trailing),
-    forwardRank: percentileRank(payload.forward, forward),
+    peRank: trailingHistory.length >= PE_PERCENTILE_MIN_POINTS ? percentileRank(trailingHistory, trailing) : null,
+    forwardRank: forwardHistory.length >= PE_PERCENTILE_MIN_POINTS ? percentileRank(forwardHistory, forward) : null,
+    updatedAt: payload.updated ?? null,
     source: "History of Market",
     isLive: true
   };
 }
 
-async function fetchNasdaq100Pe() {
-  // 主源：蛋卷基金（trailing PE + 真·近10年分位）。蛋卷无 forward PE，
-  // 用 VCP 的内嵌 JSON 补 forward PE（best-effort，失败不影响主数据）。
-  let primary;
-  try {
-    primary = await fetchDanjuanNasdaq100Pe();
-  } catch (danjuanError) {
-    // 蛋卷挂了：降级 VCP（同时给 trailing+forward）→ Yahoo QQQ（trailing-only）
-    try {
-      return await fetchVcpNasdaq100Pe();
-    } catch (vcpError) {
-      try {
-        return await fetchYahooPe("QQQ");
-      } catch (yahooError) {
-        throw new Error(
-          `Danjuan: ${danjuanError.message}; VCP: ${vcpError.message}; Yahoo: ${yahooError.message}`
-        );
-      }
-    }
-  }
-  try {
-    const fwd = await fetchVcpNasdaq100Pe();
-    primary.forwardPe = fwd.forwardPe; // 注意：forward 取自 VCP（盈利口径与蛋卷 trailing 略有差异）
-    primary.forwardSource = fwd.source;
-  } catch {
-    // forward PE 取不到就留空，Fwd 行前端自动隐藏
-  }
-  return primary;
+async function fetchSp500Pe() {
+  return fetchHistoryOfMarketPe("sp500", "S&P");
 }
 
-async function fetchDanjuanNasdaq100Pe() {
-  const response = await fetchWithRetries("https://danjuanfunds.com/djapi/index_eva/detail/NDX", {
+// 纳指100 PE：主用 History of Market(trailing/forward + forward 百分位，历史回溯到 2001），
+// VCP Scanner 已改前端渲染抓不到、故下线；兜底用 Yahoo QQQ(仅 trailing)。
+async function fetchNasdaq100Pe() {
+  let base;
+  try {
+    base = await fetchHistoryOfMarketPe("ndx", "Nasdaq 100");
+  } catch (primaryError) {
+    try {
+      return await fetchYahooPe("QQQ");
+    } catch (fallbackError) {
+      throw new Error(`History of Market: ${primaryError.message}; Yahoo fallback: ${fallbackError.message}`);
+    }
+  }
+  // History of Market 的纳指 trailing 历史太短(数周)→ trailing 分位用 Siblis 的 TTM PE 季度历史补齐。
+  // forward 分位仍用 History of Market(月度回溯到 2001，更深)。失败则 trailing 分位留空，不影响其它字段。
+  try {
+    const siblis = await fetchSiblisNdxTtmHistory();
+    if (typeof base.pe === "number" && siblis.values.length >= 4) {
+      base.peRank = percentileRank(siblis.values.map((value) => ({ value })), base.pe);
+      base.peRankLabel = `近${siblis.spanYears}年分位`;
+      base.peRankSource = siblis.source;
+    }
+  } catch {
+    // 保持 base.peRank = null
+  }
+  return base;
+}
+
+// Siblis Research 公布纳指100 季度 TTM PE(免费页约近 3 年）。用于计算 trailing PE 的历史百分位。
+async function fetchSiblisNdxTtmHistory() {
+  const response = await fetchWithTimeout("https://siblisresearch.com/data/nasdaq-100-pe-ratio/", {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
-      Accept: "application/json"
+      Accept: "text/html"
     },
-    timeoutMs: newsRequestTimeoutMs,
-    retries: 2,
-    retryDelayMs: 2500
+    timeoutMs: newsRequestTimeoutMs
   });
-  if (!response.ok) throw new Error(`蛋卷 Nasdaq 100 PE returned ${response.status}`);
-  const payload = await response.json();
-  if (payload.result_code !== 0 || !payload.data) {
-    throw new Error(`蛋卷 returned result_code ${payload.result_code}`);
+  if (!response.ok) throw new Error(`Siblis returned ${response.status}`);
+  const html = await response.text();
+  const flat = html.replace(/<[^>]+>/g, " | ").replace(/[ \t]+/g, " ");
+  // 行: date | price | TTM_PE | TTM_EPS | Forward_PE | ...，取第 3 列 TTM PE。
+  const rowRe = /(\d{1,2}\/\d{1,2}\/\d{4})\s*(?:\|\s*)+[\d,]+\.\d+\s*(?:\|\s*)+([\d.]+)/g;
+  const rows = [];
+  let match;
+  while ((match = rowRe.exec(flat))) {
+    const value = Number(match[2]);
+    const year = Number(match[1].split("/")[2]);
+    if (Number.isFinite(value) && Number.isFinite(year)) rows.push({ year, value });
   }
-  const data = payload.data;
-  const pe = numberOrNull(data.pe);
-  const percentile = numberOrNull(data.pe_percentile);
-  if (typeof pe !== "number" || !Number.isFinite(pe)) {
-    throw new Error("蛋卷 returned no PE value");
-  }
-  return {
-    pe,
-    forwardPe: null,
-    // 蛋卷 pe_percentile 是 0-1 的近10年分位（数据自 2016 起），换算成 0-100 与下游一致
-    peRank: typeof percentile === "number" && Number.isFinite(percentile) ? percentile * 100 : null,
-    forwardRank: null,
-    updatedAt: data.date ?? null,
-    source: "蛋卷基金",
-    isLive: true
-  };
+  const values = rows.map((row) => row.value);
+  if (values.length < 4) throw new Error("Siblis parsed too few TTM PE rows");
+  const years = rows.map((row) => row.year);
+  const spanYears = Math.max(...years) - Math.min(...years) + 1;
+  return { values, count: values.length, spanYears, source: "Siblis Research" };
 }
 
 async function fetchVcpNasdaq100Pe() {
@@ -848,46 +829,20 @@ async function fetchVcpNasdaq100Pe() {
   });
   if (!response.ok) throw new Error(`Nasdaq 100 PE returned ${response.status}`);
   const html = await response.text();
-
-  // 优先从页面内嵌 JSON 数据提取（Next.js Server Components 格式，引号被 JSON 转义为 \"）
-  let pe = null, forwardPe = null, updatedAt = null;
-  const jsonRaw = html.match(/\\"index_name\\":\\"nasdaq100\\"[^}]+\}/);
-  if (jsonRaw) {
-    const seg = jsonRaw[0];
-    const tm = seg.match(/\\"trailing_pe\\":([\d.]+)/);
-    const fm = seg.match(/\\"forward_pe\\":([\d.]+)/);
-    const dm = seg.match(/\\"snapshot_date\\":\\"([0-9-]+)\\"/);
-    pe = tm ? Number(tm[1]) : null;
-    forwardPe = fm ? Number(fm[1]) : null;
-    updatedAt = dm ? dm[1] : null;
-  }
-
-  // 降级：解析去标签文本（兼容旧格式及新 "X x CURRENT P/E" 格式）
-  if (!Number.isFinite(pe) || !Number.isFinite(forwardPe)) {
-    const text = html
-      .replace(/<!--\s*-->/g, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&nbsp;/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const newFmt = text.match(/([\d.]+)\s+x\s+CURRENT\s+P\/E[\s\S]{0,300}?([\d.]+)\s+x\s+FORWARD\s+P\/E/i);
-    const oldFmt = text.match(/Nasdaq 100\s+P\/E ratio is\s+([\d.]+)x\s+as of\s+([0-9-]+),\s+with a forward P\/E of\s+([\d.]+)x/i);
-    const txtFallback = text.match(/Trailing P\/E\s+([\d.]+)\s*x[\s\S]{0,240}?Forward P\/E\s+([\d.]+)\s*x/i);
-    if (newFmt) {
-      pe = Number(newFmt[1]);
-      forwardPe = Number(newFmt[2]);
-    } else if (oldFmt) {
-      pe = Number(oldFmt[1]);
-      forwardPe = Number(oldFmt[3]);
-      updatedAt = oldFmt[2];
-    } else if (txtFallback) {
-      pe = Number(txtFallback[1]);
-      forwardPe = Number(txtFallback[2]);
-    }
-  }
-
-  if (!Number.isFinite(pe) || !Number.isFinite(forwardPe)) {
+  const text = html
+    .replace(/<!--\s*-->/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const summary = text.match(
+    /Nasdaq 100\s+P\/E ratio is\s+([\d.]+)x\s+as of\s+([0-9-]+),\s+with a forward P\/E of\s+([\d.]+)x/i
+  );
+  const fallback = text.match(/Trailing P\/E\s+([\d.]+)\s*x[\s\S]{0,240}?Forward P\/E\s+([\d.]+)\s*x/i);
+  const pe = summary ? Number(summary[1]) : fallback ? Number(fallback[1]) : null;
+  const forwardPe = summary ? Number(summary[3]) : fallback ? Number(fallback[2]) : null;
+  if (typeof pe !== "number" || !Number.isFinite(pe) || typeof forwardPe !== "number" || !Number.isFinite(forwardPe)) {
     throw new Error("Nasdaq 100 PE page returned no parseable PE data");
   }
   return {
@@ -895,57 +850,41 @@ async function fetchVcpNasdaq100Pe() {
     forwardPe,
     peRank: null,
     forwardRank: null,
-    updatedAt: updatedAt ?? null,
+    updatedAt: summary?.[2] ?? null,
     source: "VCP Scanner",
     isLive: true
   };
 }
 
 async function fetchYahooPe(symbol) {
-  const url = new URL(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}`);
-  url.searchParams.set("modules", "summaryDetail,defaultKeyStatistics");
-  const response = await fetchWithRetries(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
-    },
-    timeoutMs: chartRequestTimeoutMs,
-    retries: 2,
-    retryDelayMs: 6000
-  });
-  if (!response.ok) throw new Error(`${symbol} Yahoo PE returned ${response.status}`);
-  const payload = await response.json();
-  const data = payload.quoteSummary?.result?.[0];
-  const pe = data?.summaryDetail?.trailingPE?.raw ?? data?.defaultKeyStatistics?.trailingPE?.raw;
-  const forwardPe = data?.summaryDetail?.forwardPE?.raw ?? data?.defaultKeyStatistics?.forwardPE?.raw;
+  // 经 yahoo-finance2(自动处理 crumb)取 quoteSummary，比裸调 v10 接口稳。
+  const result = await runYahoo(() =>
+    yahooFinance.quoteSummary(symbol, { modules: ["summaryDetail", "defaultKeyStatistics"] })
+  );
+  const sd = result?.summaryDetail ?? {};
+  const ks = result?.defaultKeyStatistics ?? {};
+  const pe = numberOrNull(sd.trailingPE ?? ks.trailingPE);
+  const forwardPe = numberOrNull(sd.forwardPE ?? ks.forwardPE);
   if (typeof pe !== "number" && typeof forwardPe !== "number") throw new Error(`${symbol} returned no PE metrics`);
   return {
-    pe: numberOrNull(pe),
-    forwardPe: numberOrNull(forwardPe),
+    pe,
+    forwardPe,
+    peRank: null,
+    forwardRank: null,
     source: "Yahoo Finance quoteSummary",
     isLive: true
   };
 }
 
 async function fetchYahooHistoricalSeries(symbol, chartPeriod = chartPeriods["1y"]) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=${chartPeriod.yahooRange}`;
-  const response = await fetchWithRetries(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0"
-    },
-    timeoutMs: chartRequestTimeoutMs,
-    retries: 2,
-    retryDelayMs: 2500
-  });
-  if (!response.ok) throw new Error(`${symbol} Yahoo historical returned ${response.status}`);
-  const payload = await response.json();
-  const result = payload.chart?.result?.[0];
-  const closes = result?.indicators?.adjclose?.[0]?.adjclose ?? result?.indicators?.quote?.[0]?.close ?? [];
-  const timestamps = result?.timestamp ?? [];
-  const points = closes
-    .map((value, index) => ({
-      value,
-      label: timestamps[index] ? formatAxisDate(new Date(timestamps[index] * 1000)) : null
+  const result = await runYahoo(() =>
+    fetchChart(symbol, { period1: rangeToPeriod1(chartPeriod.yahooRange), interval: "1d" })
+  );
+  const quotes = result?.quotes ?? [];
+  const points = quotes
+    .map((quote) => ({
+      value: numberOrNull(quote.adjclose ?? quote.close),
+      label: quote.date ? formatAxisDate(new Date(quote.date)) : null
     }))
     .filter((point) => typeof point.value === "number" && Number.isFinite(point.value) && point.label);
   if (points.length < 20) throw new Error(`${symbol} returned insufficient historical series`);
@@ -959,35 +898,85 @@ async function fetchYahooHistoricalSeries(symbol, chartPeriod = chartPeriods["1y
 }
 
 async function fetchYahooDailySeries(symbol, range = "6mo") {
-  const url = new URL(`https://query2.finance.yahoo.com/v8/finance/chart/${symbol}`);
-  url.searchParams.set("interval", "1d");
-  url.searchParams.set("range", range);
-  const response = await fetchWithRetries(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
-    },
-    timeoutMs: chartRequestTimeoutMs,
-    retries: 2,
-    retryDelayMs: 6000
-  });
-  if (!response.ok) throw new Error(`${symbol} Yahoo chart returned ${response.status}`);
-  const payload = await response.json();
-  const result = payload.chart?.result?.[0];
-  const closes = result?.indicators?.quote?.[0]?.close ?? [];
-  const timestamps = result?.timestamp ?? [];
-  return closes
-    .map((close, index) => ({
-      time: timestamps[index] ? new Date(timestamps[index] * 1000).toISOString() : null,
-      value: numberOrNull(close)
+  const result = await runYahoo(() => fetchChart(symbol, { period1: rangeToPeriod1(range), interval: "1d" }));
+  const quotes = result?.quotes ?? [];
+  return quotes
+    .map((quote) => ({
+      time: quote.date ? new Date(quote.date).toISOString() : null,
+      value: numberOrNull(quote.close)
     }))
     .filter((point) => point.time && typeof point.value === "number");
 }
 
-function buildIndexCard({ title, subtitleLabel, quote, pe, accent }) {
+// 用 Yahoo Finance 日线同时拿到现价/涨跌（取最近两根收盘）与折线（按周期采样）。
+async function fetchYahooMarketQuote(symbol, chartPeriod = chartPeriods["1y"]) {
+  const points = await fetchYahooDailySeries(symbol, chartPeriod.yahooRange);
+  const clean = points.filter((point) => Number.isFinite(point.value));
+  if (clean.length < 2) throw new Error(`${symbol} Yahoo returned insufficient data`);
+  const values = clean.map((point) => point.value);
+  const price = values.at(-1);
+  const previous = values.at(-2);
+  const change = price - previous;
+  const changePercent = previous ? (change / previous) * 100 : 0;
+  const sampled = sampleSeries(clean, chartPeriod.maxPoints);
+  return {
+    symbol,
+    price,
+    change,
+    changePercent,
+    open: previous,
+    high: Math.max(...values),
+    low: Math.min(...values),
+    updatedAt: clean.at(-1).time,
+    source: "Yahoo Finance",
+    isLive: true,
+    series: sampled.map((point) => point.value),
+    seriesLabels: sampled.map((point) => formatAxisDate(new Date(point.time))),
+    seriesSource: "Yahoo Finance chart",
+    seriesPeriodLabel: chartPeriod.label
+  };
+}
+
+// 近 1 年最高收盘价（用于计算回撤 DD）。
+async function fetchYearHigh(symbol) {
+  const points = await fetchYahooDailySeries(symbol, "1y");
+  const values = points.map((point) => point.value).filter(Number.isFinite);
+  if (!values.length) throw new Error(`${symbol} returned no 1y data for drawdown`);
+  return { high: Math.max(...values), isLive: true, source: "Yahoo Finance chart" };
+}
+
+// 比特币 MVRV Z-Score（链上估值指标）。
+async function fetchBtcMvrv() {
+  const response = await fetchWithTimeout("https://bitcoin-data.com/v1/mvrv-zscore/last", {
+    headers: {
+      Accept: "application/json",
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
+    },
+    timeoutMs: newsRequestTimeoutMs
+  });
+  if (!response.ok) throw new Error(`bitcoin-data.com returned ${response.status}`);
+  const payload = await response.json();
+  const value = numberOrNull(Number(payload?.mvrvZscore));
+  if (typeof value !== "number") throw new Error("bitcoin-data.com returned no MVRV Z-Score");
+  return { value, date: payload?.d ?? null, source: "bitcoin-data.com", isLive: true };
+}
+
+function buildIndexCard({ title, subtitleLabel, quote, pe, accent, yearHigh }) {
   const unavailable = !quote?.isLive;
   const change = numberOrNull(quote?.change);
   const changePercent = numberOrNull(quote?.changePercent);
+  const price = unavailable ? null : numberOrNull(quote.price);
+  // 近 1 年最高点 → 现价的回撤（DD）。DD 超过 10% 时提示加仓。
+  let drawdown = null;
+  let drawdownHigh = null;
+  let drawdownAlert = false;
+  if (typeof price === "number" && yearHigh?.isLive && typeof yearHigh.high === "number") {
+    const high = Math.max(yearHigh.high, price);
+    drawdownHigh = high;
+    drawdown = high ? ((price - high) / high) * 100 : null;
+    drawdownAlert = typeof drawdown === "number" && drawdown <= -10;
+  }
   return {
     kind: "index",
     accent,
@@ -998,11 +987,16 @@ function buildIndexCard({ title, subtitleLabel, quote, pe, accent }) {
     badgeTone: change >= 0 ? "red" : "green",
     change,
     changePercent,
+    drawdown,
+    drawdownHigh,
+    drawdownAlert,
     moveLabel: describeMove(change),
     pe: pe?.isLive ? pe.pe : null,
     peRank: pe?.isLive ? pe.peRank : null,
+    peRankLabel: pe?.isLive ? pe.peRankLabel ?? null : null,
     forwardPe: pe?.isLive ? pe.forwardPe : null,
     forwardRank: pe?.isLive ? pe.forwardRank : null,
+    forwardRankLabel: pe?.isLive ? pe.forwardRankLabel ?? null : null,
     metricsUpdatedAt: pe?.isLive ? pe.updatedAt : null,
     series: quote?.series ?? [],
     seriesLabels: quote?.seriesLabels ?? [],
@@ -1073,6 +1067,7 @@ function buildRsiCard(title, subtitle, rsi) {
   };
 }
 
+// 恐惧与贪婪指数：仪表盘 + 操作手册合并成一张卡（kind: fear，rows 为操作区间）。
 function buildFearGreedCard(fearGreed) {
   const score = numberOrNull(fearGreed?.score);
   const active = typeof score === "number" ? [25, 45, 56, 76, Infinity].findIndex((limit) => score < limit) : -1;
@@ -1087,21 +1082,6 @@ function buildFearGreedCard(fearGreed) {
     pill: active >= 0 ? moods[active] : "不可用",
     pillEn: active >= 0 ? english[active] : "NO SOURCE",
     active,
-    source: fearGreed?.source,
-    isLive: Boolean(fearGreed?.isLive),
-    error: fearGreed?.error ?? null
-  };
-}
-
-function buildPlaybookCard(fearGreed) {
-  const score = numberOrNull(fearGreed?.score);
-  const active = typeof score === "number" ? [25, 45, 56, 76, Infinity].findIndex((limit) => score < limit) : -1;
-  return {
-    kind: "playbook",
-    accent: "yellow",
-    title: "F&G PLAYBOOK",
-    subtitle: "F&G · 针对标普500",
-    active,
     rows: [
       { range: "0-24", mood: "极度恐惧", action: "分批低吸" },
       { range: "25-44", mood: "恐惧", action: "分批观察" },
@@ -1115,17 +1095,31 @@ function buildPlaybookCard(fearGreed) {
   };
 }
 
-function buildMiniCard(title, subtitle, quote, format) {
+// 趋势曲线卡：与标普500同款（大号折线 + 标记点 + 坐标），用于黄金 / 美债 / BTC / 美元指数。
+function buildTrendCard({ title, subtitle, quote, accent, valueFormat, badgeKind = "percent" }) {
+  const unavailable = !quote?.isLive;
+  const change = numberOrNull(quote?.change);
+  const changePercent = numberOrNull(quote?.changePercent);
+  const badge = unavailable
+    ? "实时源不可用"
+    : badgeKind === "basis"
+      ? formatSignedBasisPoint(change)
+      : formatPercentBadge(changePercent);
+  const moveLabel = unavailable
+    ? "实时源不可用"
+    : `${badgeKind === "basis" ? `${formatSignedNumber(change, 2)}pp` : formatSignedNumber(change, 2)} · ${describeMove(change)}`;
   return {
-    kind: "mini",
-    accent: title.startsWith("GOLD") ? "yellow" : title.startsWith("BTC") ? "orange" : "blue",
+    kind: "trend",
+    accent,
     title,
-    subtitle,
-    value: quote?.isLive ? quote.price : null,
-    valueFormat: format,
-    badge: title.startsWith("10Y") ? formatSignedBasisPoint(quote?.change) : formatPercentBadge(quote?.changePercent),
-    change: quote?.change ?? null,
-    changePercent: quote?.changePercent ?? null,
+    subtitle: unavailable ? `${subtitle} · 实时源不可用` : subtitle,
+    value: unavailable ? null : quote.price,
+    valueFormat,
+    badge,
+    badgeTone: (change ?? 0) >= 0 ? "red" : "green",
+    change,
+    changePercent,
+    moveLabel,
     series: quote?.series ?? [],
     seriesLabels: quote?.seriesLabels ?? [],
     seriesSource: quote?.seriesSource ?? quote?.source,
@@ -1133,6 +1127,45 @@ function buildMiniCard(title, subtitle, quote, format) {
     source: quote?.source,
     isLive: Boolean(quote?.isLive),
     error: quote?.error ?? null
+  };
+}
+
+// 比特币 MVRV Z-Score 估值带（kind: band）。
+function buildBtcMvrvCard(mvrv) {
+  const value = numberOrNull(mvrv?.value);
+  const thresholds = [
+    [0, "历史底部区", "重仓买入"],
+    [2, "低估积累区", "坚持定投"],
+    [3.5, "合理偏高", "持有观察"],
+    [6, "牛市偏热", "分批止盈"],
+    [7, "顶部预警", "大幅减仓"],
+    [Infinity, "极度泡沫", "清仓离场"]
+  ];
+  const english = ["BOTTOM", "ACCUMULATE", "FAIR", "HOT", "WARNING", "BUBBLE"];
+  const active = typeof value === "number" ? thresholds.findIndex(([limit]) => value < limit) : -1;
+  const rows = thresholds.map((row, index) => ({
+    range:
+      index === 0
+        ? `< ${row[0]}`
+        : index === thresholds.length - 1
+          ? `> ${thresholds[index - 1][0]}`
+          : `${thresholds[index - 1][0]}-${row[0]}`,
+    mood: row[1],
+    action: row[2]
+  }));
+  return {
+    kind: "band",
+    accent: "orange",
+    title: "BTC MVRV Z-Score",
+    subtitle: `比特币估值 · (市值−已实现市值)/市值标准差${mvrv?.date ? ` · ${mvrv.date}` : ""}`,
+    value,
+    pill: active >= 0 ? thresholds[active][1] : "不可用",
+    pillEn: active >= 0 ? english[active] : "NO SOURCE",
+    active,
+    rows,
+    source: mvrv?.source,
+    isLive: Boolean(mvrv?.isLive),
+    error: mvrv?.error ?? null
   };
 }
 
@@ -1146,17 +1179,42 @@ function buildStrategy(spRsi, ndxRsi, mvrv, ashareValue) {
 }
 
 function buildBtcStrategyItem(mvrv) {
-  const value = mvrv?.isLive ? numberOrNull(mvrv.value) : null;
-  const active = mvrvActiveIndex(value);
-  const scores = [2, 1, 0, -1, -2, -2];
+  const value = numberOrNull(mvrv?.value);
+  let score = null;
+  let action = "等待实时源";
+  let state = "不可用";
+  if (typeof value === "number") {
+    if (value < 0) {
+      score = 1;
+      action = "重仓买入";
+      state = "历史底部区";
+    } else if (value < 2) {
+      score = 1;
+      action = "坚持定投";
+      state = "低估积累区";
+    } else if (value < 3.5) {
+      score = 0;
+      action = "持有观察";
+      state = "合理偏高";
+    } else if (value < 6) {
+      score = -1;
+      action = "分批止盈";
+      state = "牛市偏热";
+    } else if (value < 7) {
+      score = -1;
+      action = "大幅减仓";
+      state = "顶部预警";
+    } else {
+      score = -1;
+      action = "清仓离场";
+      state = "极度泡沫";
+    }
+  }
   return {
     key: "btc",
-    score: active >= 0 ? scores[active] : null,
-    action: active >= 0 ? mvrvBands[active][2] : "等待实时源",
-    detail:
-      active >= 0
-        ? `比特币 MVRV Z ${value.toFixed(2)} · ${mvrvBands[active][1]}`
-        : "比特币 MVRV Z · 实时源不可用",
+    score,
+    action,
+    detail: typeof value === "number" ? `比特币 MVRV Z ${value.toFixed(2)} · ${state}` : "比特币 MVRV Z · 实时源不可用",
     isLive: Boolean(mvrv?.isLive)
   };
 }
@@ -1172,18 +1230,6 @@ function buildStrategyItem(key, label, rsi) {
     action,
     detail: typeof value === "number" ? `${label} RSI ${value.toFixed(1)} · ${state}` : `${label} RSI · 实时源不可用`,
     isLive: Boolean(rsi?.isLive)
-  };
-}
-
-function calcRsiFromQuote(quote) {
-  if (!quote?.isLive || !Array.isArray(quote.series) || quote.series.length < 20) return null;
-  const values = quote.series;
-  return {
-    value: calculateRsi(values, 14),
-    change: calculateRsi(values.slice(0, -1), 14),
-    updatedAt: quote.updatedAt ?? new Date().toISOString(),
-    source: quote.seriesSource ?? "Yahoo Finance chart",
-    isLive: true
   };
 }
 

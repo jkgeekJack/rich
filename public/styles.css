@@ -279,6 +279,57 @@ h2 {
   margin-top: 6px;
 }
 
+.drawdown {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 2px 0 6px;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.drawdown span {
+  color: var(--muted);
+}
+
+.drawdown b {
+  color: var(--ink);
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+}
+
+.drawdown i {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drawdown.alert b {
+  color: var(--red);
+}
+
+.drawdown .dd-alert {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #ffffff;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* 趋势曲线卡：复用指数卡的版式 */
+.trend-card {
+  min-height: 300px;
+}
+
+.trend-card .big-number {
+  margin-top: 6px;
+  font-size: clamp(40px, 4.6vw, 52px);
+}
+
 .band-card {
   min-height: 356px;
 }
@@ -323,6 +374,94 @@ h2 {
   gap: 0;
   padding-top: 8px;
   border-top: 2px solid var(--soft-line);
+}
+
+.rank-card {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
+  grid-template-areas:
+    "accent table"
+    "title table"
+    "subtitle table"
+    "summary table"
+    "pill table";
+  align-items: start;
+  column-gap: 48px;
+}
+
+.rank-card .accent-bar {
+  grid-area: accent;
+}
+
+.rank-card h2 {
+  grid-area: title;
+}
+
+.rank-card .sub {
+  grid-area: subtitle;
+}
+
+.rank-card .state-pill {
+  grid-area: pill;
+  margin-bottom: 0;
+}
+
+.rank-summary {
+  display: grid;
+  grid-area: summary;
+  justify-items: center;
+  gap: 2px;
+  margin: 12px 0;
+}
+
+.rank-summary span {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.rank-summary strong {
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-size: clamp(56px, 7vw, 78px);
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.rank-table {
+  display: grid;
+  grid-area: table;
+  align-self: center;
+  padding-top: 8px;
+  border-top: 2px solid var(--soft-line);
+}
+
+.rank-row {
+  display: grid;
+  position: relative;
+  grid-template-columns: 1fr 1fr;
+  min-height: 25px;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.rank-row.head {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.rank-row.active {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--rank-color) 14%, white);
+}
+
+.rank-row:not(.head) span,
+.rank-row:not(.head) strong {
+  color: var(--rank-color);
 }
 
 .band-row {
@@ -381,6 +520,19 @@ h2 {
 .fear-card,
 .playbook-card {
   min-height: 292px;
+}
+
+/* 合并后的恐惧与贪婪卡同时包含仪表盘和操作手册，需要更高 */
+.fear-card {
+  min-height: 470px;
+}
+
+.fear-card .fear-scale {
+  margin-top: 20px;
+}
+
+.fear-card .playbook-table {
+  margin-top: 18px;
 }
 
 .fear-number {
@@ -579,7 +731,7 @@ h2 {
 
 .strategy-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
 }
 
@@ -646,6 +798,22 @@ h2 {
 
   .date-pill {
     min-width: 0;
+  }
+
+  .rank-card {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "accent"
+      "title"
+      "subtitle"
+      "summary"
+      "pill"
+      "table";
+    column-gap: 0;
+  }
+
+  .rank-card .state-pill {
+    margin-bottom: 18px;
   }
 }
 
