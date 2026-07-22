@@ -10,6 +10,7 @@
     "verify:fixture": "node scripts/verify-fixture.mjs"
   },
   "dependencies": {
+    "@vercel/speed-insights": "^2.0.0",
     "express": "^5.1.0",
     "yahoo-finance2": "^3.15.3"
   },

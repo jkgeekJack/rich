@@ -3,16 +3,70 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>今日美股情绪观察</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@500;700;800;900&family=Inter:wght@700;800;900&display=swap"
-      rel="stylesheet"
+    <title>Rich｜美股市场情绪与A股性价比仪表盘</title>
+    <meta
+      name="description"
+      content="Rich 投资决策仪表盘：实时观察标普500、纳斯达克100、VIX、恐惧贪婪指数，以及沪深300 A股性价比、估值、宏观和风险指标。"
     />
+    <meta name="author" content="Rich" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://rich.jkgeekjk.xyz/" />
+    <meta name="theme-color" content="#111827" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Rich" />
+    <meta property="og:title" content="Rich｜美股市场情绪与A股性价比仪表盘" />
+    <meta
+      property="og:description"
+      content="把美股行情、A股性价比、估值、宏观和情绪指标放在同一张桌面上。"
+    />
+    <meta property="og:url" content="https://rich.jkgeekjk.xyz/" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Rich｜美股市场情绪与A股性价比仪表盘" />
+    <meta
+      name="twitter:description"
+      content="实时查看美股市场情绪、沪深300 A股性价比与关键估值指标。"
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Rich 投资决策仪表盘",
+        "url": "https://rich.jkgeekjk.xyz/",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "zh-CN",
+        "isAccessibleForFree": true,
+        "description": "实时观察美股市场情绪、沪深300 A股性价比、估值、宏观和风险指标的研究辅助工具，不构成投资建议。",
+        "featureList": [
+          "沪深300 A股性价比",
+          "标普500与纳斯达克100行情",
+          "VIX与恐惧贪婪指数",
+          "估值、宏观与定投策略"
+        ]
+      }
+    </script>
     <link rel="stylesheet" href="/styles.css" />
-    <!-- Vercel Web Analytics 采集脚本 -->
-    <script defer src="/_vercel/insights/script.js"></script>
+    <!-- Vercel Web Analytics 与 Speed Insights；原生静态页面使用官方脚本接入方式。 -->
+    <script>
+      (() => {
+        const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+        if (localHosts.has(window.location.hostname)) return;
+
+        const loadVercelScript = (src) => {
+          const script = document.createElement("script");
+          script.defer = true;
+          script.src = src;
+          document.head.appendChild(script);
+        };
+
+        window.si = window.si || function (...args) {
+          (window.siq = window.siq || []).push(args);
+        };
+        loadVercelScript("/_vercel/insights/script.js");
+        loadVercelScript("/_vercel/speed-insights/script.js");
+      })();
+    </script>
   </head>
   <body>
     <main class="poster" aria-label="今日美股情绪观察">
@@ -27,12 +81,41 @@
         </div>
       </header>
 
-      <section class="grid" id="dashboardGrid"></section>
+      <section class="grid" id="dashboardGrid" aria-live="polite">
+        <article class="card loading-card skeleton-card" role="status">正在获取实时市场数据</article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+        <article class="card loading-card skeleton-card" aria-hidden="true"></article>
+      </section>
 
       <section class="strategy" aria-label="今日定投策略">
         <h2>今日定投策略</h2>
-        <div class="strategy-grid"></div>
+        <div class="strategy-grid">
+          <article class="strategy-card skeleton-strategy" aria-hidden="true"></article>
+          <article class="strategy-card skeleton-strategy" aria-hidden="true"></article>
+          <article class="strategy-card skeleton-strategy" aria-hidden="true"></article>
+          <article class="strategy-card skeleton-strategy" aria-hidden="true"></article>
+        </div>
       </section>
+
+      <noscript>
+        <section aria-label="投资决策仪表盘简介">
+          <h2>A股性价比与美股市场情绪</h2>
+          <p>
+            Rich 提供沪深300 A股性价比、标普500、纳斯达克100、VIX、恐惧与贪婪指数、黄金、美债、比特币和美元指数等指标，帮助你完成投资前的结构化检查。
+          </p>
+          <p>页面需要启用 JavaScript 才能加载实时数据、趋势图和定投策略。所有内容仅供研究参考，不构成投资建议。</p>
+        </section>
+      </noscript>
     </main>
 
     <script src="/app.js" type="module"></script>

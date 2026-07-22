@@ -12,6 +12,8 @@
   --blue: #2f82bd;
   --orange: #f7931a;
   --card-radius: 16px;
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-numeric: "SF Pro Display", "Segoe UI", ui-sans-serif, sans-serif;
 }
 
 * {
@@ -27,7 +29,7 @@ body {
   margin: 0;
   background: #ffffff;
   color: var(--ink);
-  font-family: "Noto Sans SC", "Inter", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: 0;
 }
 
@@ -135,6 +137,45 @@ h1 {
   color: var(--red);
 }
 
+.skeleton-card {
+  min-height: 360px;
+  border-color: #e6e9ed;
+  background:
+    linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 75%) 50%, transparent 70%) 0 0 / 220% 100%,
+    linear-gradient(#e9edf1 0 0) 28px 32px / 42px 7px no-repeat,
+    linear-gradient(#eef1f4 0 0) 28px 62px / 48% 22px no-repeat,
+    linear-gradient(#f2f4f6 0 0) 28px 98px / 70% 14px no-repeat,
+    linear-gradient(#e9edf1 0 0) 28px 142px / 42% 52px no-repeat,
+    linear-gradient(#f3f5f7 0 0) 28px 222px / calc(100% - 56px) 100px no-repeat,
+    #ffffff;
+  color: transparent;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+.skeleton-card:nth-child(1),
+.skeleton-card:nth-child(2),
+.skeleton-card:nth-child(7),
+.skeleton-card:nth-child(11),
+.skeleton-card:nth-child(13) {
+  min-height: 430px;
+}
+
+.skeleton-strategy {
+  border-color: #e6e9ed;
+  background: #f1f3f5;
+  color: #e6e9ed;
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 120% 0, 28px 32px, 28px 62px, 28px 98px, 28px 142px, 28px 222px, 0 0; }
+  100% { background-position: -120% 0, 28px 32px, 28px 62px, 28px 98px, 28px 142px, 28px 222px, 0 0; }
+}
+
+@keyframes skeleton-pulse {
+  50% { opacity: 0.55; }
+}
+
 .unavailable {
   background: #fffdfd;
 }
@@ -219,7 +260,7 @@ h2 {
 .big-number {
   display: block;
   margin: 4px 0 0;
-  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-family: var(--font-numeric);
   font-size: clamp(46px, 5vw, 58px);
   font-weight: 900;
   line-height: 1.04;
@@ -295,7 +336,7 @@ h2 {
 
 .drawdown b {
   color: var(--ink);
-  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-family: var(--font-numeric);
 }
 
 .drawdown i {
@@ -337,7 +378,7 @@ h2 {
 .center-number,
 .fear-number {
   display: block;
-  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-family: var(--font-numeric);
   font-size: clamp(72px, 8vw, 94px);
   font-weight: 900;
   line-height: 1;
@@ -422,7 +463,7 @@ h2 {
 }
 
 .rank-summary strong {
-  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-family: var(--font-numeric);
   font-size: clamp(56px, 7vw, 78px);
   font-weight: 900;
   line-height: 1;
@@ -685,7 +726,7 @@ h2 {
 .mini-copy strong {
   display: block;
   margin-top: 8px;
-  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-family: var(--font-numeric);
   font-size: 44px;
   font-weight: 900;
   line-height: 1;
@@ -755,7 +796,7 @@ h2 {
 
 .strategy-card strong {
   color: var(--ink);
-  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-family: var(--font-numeric);
   font-size: 58px;
   font-weight: 900;
   line-height: 0.9;
@@ -824,6 +865,15 @@ h2 {
 
   .card {
     padding: 20px 22px;
+  }
+
+  .skeleton-card,
+  .skeleton-card:nth-child(1),
+  .skeleton-card:nth-child(2),
+  .skeleton-card:nth-child(7),
+  .skeleton-card:nth-child(11),
+  .skeleton-card:nth-child(13) {
+    min-height: 340px;
   }
 
   .title-row {

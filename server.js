@@ -1,4 +1,5 @@
 import express from "express";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YahooFinance from "yahoo-finance2";
@@ -56,7 +57,14 @@ const chartRequestTimeoutMs = 4_000;
 const newsRequestTimeoutMs = 8_000;
 let newsCache = { fetchedAt: 0, data: [] };
 const sentimentCache = new Map();
-const sentimentCacheTtlMs = Number(process.env.SENTIMENT_TTL_MS) || 60_000;
+const sentimentCacheTtlMs = Number(process.env.SENTIMENT_TTL_MS) || 5 * 60_000;
+const sentimentDiskCacheMaxAgeMs = Number(process.env.SENTIMENT_DISK_MAX_AGE_MS) || 24 * 60 * 60_000;
+const sentimentCacheDirectory = process.env.SENTIMENT_CACHE_DIR
+  ? path.resolve(process.env.SENTIMENT_CACHE_DIR)
+  : process.env.VERCEL === "1"
+    ? "/tmp/invest-website-cache"
+    : path.join(__dirname, ".cache");
+const sentimentRefreshes = new Map();
 // stale-while-revalidate：保存每个周期最近一次成功的卡片/策略，
 // 当 Yahoo 等数据源临时 429 时回填上一次的好值，避免卡片显示「实时源不可用」。
 const lastGoodSentiment = new Map();
@@ -103,6 +111,8 @@ app.get("/api/health", (_request, response) => {
     quoteRequestTimeoutMs,
     chartRequestTimeoutMs,
     newsRequestTimeoutMs,
+    sentimentCacheTtlMs,
+    sentimentDiskCacheMaxAgeMs,
     sources: ["Nasdaq", "CoinGecko", "Yahoo chart fallback", "Nasdaq RSS", "MarketWatch RSS"]
   });
 });
@@ -114,7 +124,13 @@ app.get("/api/market", async (_request, response) => {
 
 app.get("/api/sentiment", async (request, response) => {
   const snapshot = await loadSentimentSnapshot(request.query.period);
-  response.status(snapshot.status === "offline" ? 502 : 200).json(snapshot);
+  const status = snapshot.status === "offline" ? 502 : 200;
+  response.setHeader(
+    "Cache-Control",
+    status === 200 ? "public, max-age=60, s-maxage=300, stale-while-revalidate=86400" : "no-store"
+  );
+  response.setHeader("X-Data-Cache", snapshot.cache?.source ?? "live");
+  response.status(status).json(snapshot);
 });
 
 app.get("/api/stream", async (request, response) => {
@@ -241,9 +257,35 @@ async function loadSentimentSnapshot(periodKey = "1y") {
   const chartPeriod = chartPeriods[periodKey] ?? chartPeriods["1y"];
   const cached = sentimentCache.get(chartPeriod.key);
   if (cached?.data && Date.now() - cached.fetchedAt < sentimentCacheTtlMs) {
-    return cached.data;
+    const originalStoredAt = Date.parse(cached.data?.cache?.storedAt ?? "");
+    return withSentimentCacheMetadata(
+      cached.data,
+      "memory",
+      Number.isFinite(originalStoredAt) ? originalStoredAt : cached.fetchedAt
+    );
   }
 
+  const diskCached = await readSentimentDiskCache(chartPeriod.key);
+  if (diskCached) {
+    seedLastGoodSentiment(diskCached.data, chartPeriod.key);
+    if (diskCached.ageMs < sentimentCacheTtlMs) {
+      const snapshot = withSentimentCacheMetadata(diskCached.data, "disk", diskCached.storedAt);
+      sentimentCache.set(chartPeriod.key, { fetchedAt: diskCached.storedAt, data: snapshot });
+      return snapshot;
+    }
+  }
+
+  const refreshing = sentimentRefreshes.get(chartPeriod.key);
+  if (refreshing) return refreshing;
+
+  const refresh = refreshSentimentSnapshot(chartPeriod, diskCached).finally(() => {
+    sentimentRefreshes.delete(chartPeriod.key);
+  });
+  sentimentRefreshes.set(chartPeriod.key, refresh);
+  return refresh;
+}
+
+async function refreshSentimentSnapshot(chartPeriod, diskCached) {
   const startedAt = Date.now();
   const failures = [];
   // Stooq 行情源已失效（^spx/^ndx/xauusd 返回 404），统一改用 Yahoo Finance 拉行情+折线。
@@ -402,8 +444,84 @@ async function loadSentimentSnapshot(periodKey = "1y") {
 
   applyStaleWhileRevalidate(snapshot, chartPeriod.key);
 
-  sentimentCache.set(chartPeriod.key, { fetchedAt: Date.now(), data: snapshot });
-  return snapshot;
+  if (liveCount === 0 && diskCached) {
+    const fallback = withSentimentCacheMetadata(
+      {
+        ...diskCached.data,
+        status: "stale",
+        failures,
+        latencyMs: Date.now() - startedAt
+      },
+      "disk-fallback",
+      diskCached.storedAt
+    );
+    sentimentCache.set(chartPeriod.key, { fetchedAt: Date.now(), data: fallback });
+    return fallback;
+  }
+
+  const storedAt = Date.now();
+  if (failures.length === 0) {
+    await writeSentimentDiskCache(chartPeriod.key, snapshot, storedAt);
+  }
+
+  const result = withSentimentCacheMetadata(snapshot, failures.length ? "refreshed-partial" : "live", storedAt);
+  sentimentCache.set(chartPeriod.key, { fetchedAt: storedAt, data: result });
+  return result;
+}
+
+function sentimentDiskCachePath(periodKey) {
+  return path.join(sentimentCacheDirectory, `sentiment-${periodKey}.json`);
+}
+
+async function readSentimentDiskCache(periodKey) {
+  try {
+    const payload = JSON.parse(await readFile(sentimentDiskCachePath(periodKey), "utf8"));
+    const storedAt = Number(payload?.storedAt);
+    const ageMs = Date.now() - storedAt;
+    if (!payload?.data?.cards || !Number.isFinite(storedAt) || ageMs < 0 || ageMs > sentimentDiskCacheMaxAgeMs) {
+      return null;
+    }
+    return { data: payload.data, storedAt, ageMs };
+  } catch {
+    return null;
+  }
+}
+
+async function writeSentimentDiskCache(periodKey, snapshot, storedAt = Date.now()) {
+  try {
+    await mkdir(sentimentCacheDirectory, { recursive: true });
+    const target = sentimentDiskCachePath(periodKey);
+    const temporary = `${target}.${process.pid}.${storedAt}.tmp`;
+    await writeFile(temporary, JSON.stringify({ version: 1, storedAt, data: snapshot }), "utf8");
+    await rename(temporary, target);
+    return storedAt;
+  } catch {
+    return null;
+  }
+}
+
+function withSentimentCacheMetadata(snapshot, source, storedAt) {
+  const ageMs = Math.max(0, Date.now() - storedAt);
+  return {
+    ...snapshot,
+    cache: {
+      source,
+      storedAt: new Date(storedAt).toISOString(),
+      ageMs,
+      stale: ageMs >= sentimentCacheTtlMs,
+      maxAgeMs: sentimentDiskCacheMaxAgeMs
+    }
+  };
+}
+
+function seedLastGoodSentiment(snapshot, periodKey) {
+  if (!snapshot?.cards) return;
+  const store = lastGoodSentiment.get(periodKey) ?? { cards: new Map(), strategy: null };
+  for (const [key, card] of Object.entries(snapshot.cards)) {
+    if (card) store.cards.set(key, card);
+  }
+  if (Array.isArray(snapshot.strategy)) store.strategy = snapshot.strategy;
+  lastGoodSentiment.set(periodKey, store);
 }
 
 // 数据源临时失败时，用上一次成功的卡片/策略回填，保持页面有数据可看。

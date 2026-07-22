@@ -1,11 +1,17 @@
 // 确定性验证：用 stub fetch 喂固定行情，跑通 server 数据塑形 + 前端渲染，
 // 不依赖外网（Yahoo 对单机限流时也能验证），并专门覆盖 DD>10% 加仓提示路径。
 import { chromium } from "playwright";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const PORT = 3077;
 const DAY = 86_400_000;
 const now = Date.now();
+const cacheDirectory = await mkdtemp(join(tmpdir(), "invest-cache-fixture-"));
 process.env.SENTIMENT_TTL_MS = "200"; // 让缓存快速过期，便于测试 stale-while-revalidate
+process.env.SENTIMENT_DISK_MAX_AGE_MS = String(DAY);
+process.env.SENTIMENT_CACHE_DIR = cacheDirectory;
 let yahooDown = false; // 第二阶段翻转为 true，模拟 Yahoo 临时 429
 
 function makeChart(closes) {
@@ -149,6 +155,13 @@ const fail = (msg) => {
   throw new Error(`API CHECK FAILED: ${msg}`);
 };
 
+if (!res.headers.get("cache-control")?.includes("s-maxage=300")) fail("API is missing CDN cache headers");
+if (res.headers.get("x-data-cache") !== "live") fail(`expected first request to be live, got ${res.headers.get("x-data-cache")}`);
+const persistedCache = JSON.parse(await readFile(join(cacheDirectory, "sentiment-1y.json"), "utf8"));
+if (!persistedCache?.storedAt || Object.keys(persistedCache?.data?.cards ?? {}).length !== 13) {
+  fail("24-hour disk cache was not persisted");
+}
+
 const expected = ["sp500", "ndx", "vix", "vxn", "spRsi", "ndxRsi", "fearGreed", "gold", "treasury", "btc", "btcMvrv", "dollar", "ashareValue"];
 for (const k of expected) if (!cards[k]) fail(`missing card ${k}`);
 if (cards.playbook) fail("playbook card should be merged away");
@@ -216,7 +229,8 @@ await new Promise((r) => setTimeout(r, 300));
 
 // ---------- Frontend (real browser) assertions ----------
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1125, height: 2600 }, deviceScaleFactor: 1 });
+const context = await browser.newContext({ viewport: { width: 1125, height: 2600 }, deviceScaleFactor: 1 });
+const page = await context.newPage();
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(e.message));
@@ -254,6 +268,36 @@ await page.setViewportSize({ width: 390, height: 2400 });
 await page.waitForTimeout(300);
 const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
 await page.screenshot({ path: "verify-fixture-mobile.png", fullPage: true });
+
+// 同一浏览器在 API 离线时，仍应从最多 24 小时的 localStorage 缓存立即恢复完整页面。
+const cachedPage = await context.newPage();
+await cachedPage.route("**/api/sentiment**", (route) => route.abort());
+await cachedPage.goto(`http://localhost:${PORT}`, { waitUntil: "domcontentloaded" });
+await cachedPage.waitForFunction(
+  () => document.querySelectorAll(".card").length === 13 && document.body.textContent.includes("A股性价比"),
+  undefined,
+  { timeout: 3000 }
+);
+const browserCache = await cachedPage.evaluate(() => ({
+  source: document.querySelector(".date-pill")?.dataset.cache,
+  cards: document.querySelectorAll(".card").length,
+  strategy: document.querySelectorAll(".strategy-card").length
+}));
+
+// 超过 24 小时的浏览器缓存必须失效，不能被继续展示或续期。
+await cachedPage.evaluate((day) => {
+  const key = "rich:sentiment:v1:1y";
+  const cached = JSON.parse(localStorage.getItem(key));
+  cached.storedAt = Date.now() - day - 1;
+  localStorage.setItem(key, JSON.stringify(cached));
+}, DAY);
+const expiredPage = await context.newPage();
+await expiredPage.route("**/api/sentiment**", (route) => route.abort());
+await expiredPage.goto(`http://localhost:${PORT}`, { waitUntil: "domcontentloaded" });
+await expiredPage.waitForSelector(".loading-card.error", { timeout: 3000 });
+const expiredBrowserCacheWasUsed = await expiredPage.evaluate(
+  () => document.querySelector(".rank-card") !== null || document.querySelector(".date-pill")?.dataset.cache === "cached"
+);
 await browser.close();
 
 const dfail = (msg) => {
@@ -272,7 +316,13 @@ if (dom.painted.some((p) => p < 100)) dfail(`unpainted canvas: ${JSON.stringify(
 if (dom.scrollWidth > dom.width) dfail(`desktop overflow ${dom.scrollWidth}/${dom.width}`);
 if (mobileOverflow) dfail("mobile horizontal overflow");
 if (errors.length) dfail(`browser errors: ${errors.join(" | ")}`);
+if (browserCache.source !== "cached" || browserCache.cards !== 13 || browserCache.strategy !== 4) {
+  dfail(`browser cache fallback failed: ${JSON.stringify(browserCache)}`);
+}
+if (expiredBrowserCacheWasUsed) dfail("browser cache older than 24 hours was rendered");
 
 console.log("DOM OK:", JSON.stringify({ ...dom, text: undefined, painted: dom.painted.length + " canvases painted" }));
+console.log("CACHE OK:", JSON.stringify({ disk: "sentiment-1y.json", browser: browserCache }));
 console.log("\n✅ ALL FIXTURE CHECKS PASSED");
+await rm(cacheDirectory, { recursive: true, force: true });
 process.exit(0);

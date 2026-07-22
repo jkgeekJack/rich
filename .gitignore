@@ -1,5 +1,6 @@
 .vercel
 node_modules/
+.cache/
 .DS_Store
 nohup.out
 dashboard-desktop.png

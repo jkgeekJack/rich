@@ -11,36 +11,47 @@ const grid = document.querySelector("#dashboardGrid");
 const datePill = document.querySelector(".date-pill");
 const strategyGrid = document.querySelector(".strategy-grid");
 const periodButtons = Array.from(document.querySelectorAll(".period-button"));
+const CLIENT_CACHE_VERSION = "v1";
+const CLIENT_CACHE_MAX_AGE_MS = 24 * 60 * 60_000;
+const CLIENT_REFRESH_INTERVAL_MS = 5 * 60_000;
 let selectedPeriod = localStorage.getItem("sentimentChartPeriod") || "1y";
 
-grid.innerHTML = `<article class="card loading-card">正在获取实时市场数据</article>`;
-strategyGrid.innerHTML = "";
+const restoredFromCache = restoreCachedSentiment(selectedPeriod);
 
 periodButtons.forEach((button) => {
   button.addEventListener("click", () => {
     selectedPeriod = button.dataset.period;
     localStorage.setItem("sentimentChartPeriod", selectedPeriod);
     updatePeriodButtons(selectedPeriod);
-    loadSentiment();
+    const restored = restoreCachedSentiment(selectedPeriod);
+    if (!restored) renderLoadingState();
+    loadSentiment({ preserveExisting: restored });
   });
 });
 updatePeriodButtons(selectedPeriod);
-loadSentiment();
-window.setInterval(loadSentiment, 60_000);
+loadSentiment({ preserveExisting: restoredFromCache });
+window.setInterval(() => loadSentiment({ preserveExisting: true }), CLIENT_REFRESH_INTERVAL_MS);
 
-async function loadSentiment() {
+async function loadSentiment({ preserveExisting = false } = {}) {
+  const requestedPeriod = selectedPeriod;
   try {
-    const response = await fetch(`/api/sentiment?period=${encodeURIComponent(selectedPeriod)}&t=${Date.now()}`);
+    const response = await fetch(`/api/sentiment?period=${encodeURIComponent(requestedPeriod)}`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.failures?.map((item) => item.message).join("; ") || `HTTP ${response.status}`);
+    if (requestedPeriod !== selectedPeriod) return;
+    saveCachedSentiment(requestedPeriod, payload);
     renderDashboard(payload);
   } catch (error) {
+    if (preserveExisting || restoreCachedSentiment(requestedPeriod)) return;
     grid.innerHTML = `<article class="card loading-card error">实时数据获取失败<br /><small>${escapeHtml(error.message)}</small></article>`;
+    strategyGrid.innerHTML = "";
   }
 }
 
-function renderDashboard(payload) {
+function renderDashboard(payload, { cached = false } = {}) {
   datePill.textContent = payload.displayDate;
+  datePill.title = cached ? "当前显示本机缓存，后台正在更新" : "数据已更新";
+  datePill.dataset.cache = cached ? "cached" : "live";
   selectedPeriod = payload.chartPeriod?.key ?? selectedPeriod;
   updatePeriodButtons(selectedPeriod);
   const orderedCards = [
@@ -63,6 +74,49 @@ function renderDashboard(payload) {
   grid.innerHTML = orderedCards.map(renderCard).join("");
   strategyGrid.innerHTML = payload.strategy.map(renderStrategy).join("");
   drawAllCharts();
+}
+
+function clientCacheKey(period) {
+  return `rich:sentiment:${CLIENT_CACHE_VERSION}:${period}`;
+}
+
+function restoreCachedSentiment(period) {
+  try {
+    const cached = JSON.parse(localStorage.getItem(clientCacheKey(period)) ?? "null");
+    const ageMs = Date.now() - Number(cached?.storedAt);
+    if (!cached?.payload?.cards || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > CLIENT_CACHE_MAX_AGE_MS) {
+      if (cached) localStorage.removeItem(clientCacheKey(period));
+      return false;
+    }
+    renderDashboard(cached.payload, { cached: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function saveCachedSentiment(period, payload) {
+  try {
+    const sourceTimestamp = Date.parse(payload?.cache?.storedAt ?? payload?.generatedAt ?? "");
+    const storedAt = Number.isFinite(sourceTimestamp) ? sourceTimestamp : Date.now();
+    localStorage.setItem(clientCacheKey(period), JSON.stringify({ storedAt, payload }));
+  } catch {
+    // localStorage 受限或空间不足时继续使用网络数据。
+  }
+}
+
+function renderLoadingState() {
+  grid.innerHTML = Array.from(
+    { length: 13 },
+    (_, index) =>
+      `<article class="card loading-card skeleton-card" ${index ? 'aria-hidden="true"' : 'role="status"'}>${
+        index ? "" : "正在获取实时市场数据"
+      }</article>`
+  ).join("");
+  strategyGrid.innerHTML = Array.from(
+    { length: 4 },
+    () => '<article class="strategy-card skeleton-strategy" aria-hidden="true"></article>'
+  ).join("");
 }
 
 function renderCard(card) {
@@ -306,7 +360,7 @@ function drawSpark(canvas, series, color, marker, labels = []) {
 
   if (series.length < 2) {
     ctx.fillStyle = "#7c8491";
-    ctx.font = "700 18px Noto Sans SC, sans-serif";
+    ctx.font = "700 18px sans-serif";
     ctx.fillText("实时趋势不可用", 16, height / 2);
     return;
   }
@@ -328,7 +382,7 @@ function drawSpark(canvas, series, color, marker, labels = []) {
   drawPath(ctx, points, color, marker ? 7 : 5);
 
   ctx.fillStyle = "#9da2aa";
-  ctx.font = "800 11px Inter, sans-serif";
+  ctx.font = "800 11px sans-serif";
   const ticks = buildAxisTicks(labels, series.length);
   ticks.forEach((tick) => {
     const x = padX + tick.ratio * (width - padX * 2);

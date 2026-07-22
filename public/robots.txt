@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /_vercel/
+
+Sitemap: https://rich.jkgeekjk.xyz/sitemap.xml
