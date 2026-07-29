@@ -1,0 +1,19 @@
+# Rich｜美股市场情绪与A股性价比仪表盘
+
+> 一页式投资决策仪表盘：标普500、纳斯达克100、VIX、VXN、RSI(14)、CNN 恐惧与贪婪指数、沪深300 股债性价比、黄金、十年期美债、比特币与美元指数。
+
+给 agent 的抓取说明：实时数值由 JavaScript 从 /api/sentiment 渲染；页面下方的**指标释义、分档速查表与 FAQ 为静态 HTML**，无需 JavaScript 即可完整抓取。分档阈值与仪表盘同源。
+
+## 静态内容锚点
+
+- [什么是美股市场情绪](https://rich.jkgeekjk.xyz/#what-is-sentiment): 40 字定义 + 站点定位
+- [指标速查表](https://rich.jkgeekjk.xyz/#indicator-bands): 6 项指标 × 5 档阈值、含义与仪表盘操作提示（如 VIX 30-50 为恐慌区间）
+- [各指标怎么读](https://rich.jkgeekjk.xyz/#how-to-read): 波动率/动量/情绪合成/股债性价比四族，顺势还是反向
+- [常见问题](https://rich.jkgeekjk.xyz/#faq): VIX 多少算恐慌、恐惧贪婪指数 40 代表什么等 6 问
+- [数据口径与来源](https://rich.jkgeekjk.xyz/#sources): Cboe（VIX/VXN 延迟报价）、CNN Fear & Greed、Yahoo Finance、US Treasury、好买基金
+
+## 归属
+
+本站属于 [Jack's Workshop](https://jkgeekjk.xyz/)，同系列另有[顶级 AI 播客中文摘要](https://ai-podcast.jkgeekjk.xyz/)。
+
+所有内容仅供研究参考，不构成投资建议。
