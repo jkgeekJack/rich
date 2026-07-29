@@ -154,7 +154,7 @@ public/app.js       不动
    | 站内 | `https://jkgeekjk.xyz/`、`https://ai-podcast.jkgeekjk.xyz/`、`https://jkgeekjk.xyz/zhuzi`、`https://jkgeekjk.xyz/qiaopi` |
    | Cboe VIX | `https://www.cboe.com/tradable_products/vix/` |
    | CNN Fear & Greed | `https://www.cnn.com/markets/fear-and-greed` |
-   | US Treasury 利率 | `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/` |
+   | US Treasury 利率 | `https://home.treasury.gov/policy-issues/financing-the-government/interest-rate-statistics` |
    | 好买股债性价比 | `https://data.howbuy.com/` |
    | Yahoo Finance | `https://finance.yahoo.com/` |
 
