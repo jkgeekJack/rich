@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node server.js",
     "verify": "node scripts/verify.mjs",
-    "verify:fixture": "node scripts/verify-fixture.mjs"
+    "verify:fixture": "node scripts/verify-fixture.mjs",
+    "verify:bands": "node scripts/verify-bands.mjs"
   },
   "dependencies": {
     "@vercel/speed-insights": "^2.0.0",

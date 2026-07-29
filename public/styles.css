@@ -923,3 +923,214 @@ h2 {
     grid-template-columns: 90px 1fr;
   }
 }
+
+/* ---------- 静态说明层（不依赖 JS，爬虫可见） ---------- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.js-notice {
+  margin: 28px 0 0;
+  padding: 12px 16px;
+  border: 1px solid var(--yellow);
+  border-radius: 10px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.explainer {
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--ink);
+}
+
+.explainer h2 {
+  margin: 32px 0 12px;
+  font-size: 20px;
+}
+
+.explainer h2:first-child {
+  margin-top: 0;
+}
+
+.explainer h3 {
+  margin: 22px 0 8px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.explainer p {
+  margin: 0 0 12px;
+}
+
+.explainer-lede {
+  font-size: 16px;
+  color: #1f2937;
+}
+
+/* 宽表在自己的容器里横向滚动，页面本身不横向滚动 */
+.explainer-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+/* table-layout: fixed + colgroup：强制所有 tbody 行组共用同一套列宽。
+   auto 布局下每个行组的 rowgroup 表头宽度不同，各档数据会左右错位。 */
+.explainer-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.explainer-table .col-metric { width: 28%; }
+.explainer-table .col-band { width: 20%; }
+.explainer-table .col-mood { width: 22%; }
+.explainer-table .col-action { width: 30%; }
+
+.explainer-table thead th {
+  padding: 10px 14px;
+  background: #f7f9fb;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.explainer-table tbody {
+  border-top: 1px solid var(--line);
+}
+
+.explainer-table tbody:first-of-type {
+  border-top: 0;
+}
+
+.explainer-table th[scope="rowgroup"] {
+  padding: 12px 14px;
+  vertical-align: top;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 800;
+  color: #111827;
+  line-height: 1.35;
+  border-right: 1px solid var(--soft-line);
+}
+
+.explainer-table th[scope="rowgroup"] span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.explainer-table td {
+  padding: 8px 14px;
+  border-top: 1px solid var(--soft-line);
+  vertical-align: top;
+}
+
+.explainer-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.explainer-table td:first-of-type {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #111827;
+  font-weight: 600;
+}
+
+.band-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.band-disclaimer {
+  margin-bottom: 4px;
+}
+
+.band-disclaimer strong {
+  color: var(--red);
+}
+
+.faq {
+  margin: 0;
+}
+
+.faq dt {
+  margin-top: 16px;
+  font-weight: 800;
+  color: #111827;
+}
+
+.faq dt:first-child {
+  margin-top: 0;
+}
+
+.faq dd {
+  margin: 4px 0 0;
+  color: #374151;
+}
+
+.source-list,
+.works-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+.source-list li,
+.works-list li {
+  margin-bottom: 6px;
+}
+
+.explainer a {
+  color: var(--blue);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(47, 130, 189, 0.35);
+}
+
+.explainer a:hover {
+  border-bottom-color: var(--blue);
+}
+
+@media (max-width: 720px) {
+  .explainer {
+    margin-top: 26px;
+    padding-top: 20px;
+    font-size: 14.5px;
+  }
+
+  .explainer h2 {
+    font-size: 18px;
+    margin-top: 26px;
+  }
+
+  .explainer-table {
+    min-width: 520px;
+  }
+}

@@ -167,6 +167,12 @@ public/app.js       不动
    1. 两端各自把 `.strategy` 的结束 `</section>` 之后、`</main>` 之前的**整段**替换为固定占位符 `<!--REGION-->`
    2. 归一化后必须**逐字节相同**，任何差异判失败，尤其 `<head>` 与 dashboard/strategy 两节点
    3. 为什么必须整段归一化：现有介绍位于 `<noscript>`（`:115-123`），正在该区间内；本次会把它移出并新增章节，故这一整段两端必然不同，生产端 HTML **不可能**是灰度端的字节子集
+7b. **新增类名不得与既有类名重名**（实施中真实踩到过）：把新 CSS 段里引用的每个类名，逐个比对基线版本的 `styles.css`、`app.js`、`index.html`，命中即失败。
+
+   起因：最初把速查表命名为 `.band-table`，而 `styles.css:413` 已有同名规则、`app.js:192` 会给仪表盘的 band 卡片渲染 `<div class="band-table">`。结果我的 `.band-table td` 等规则**泄漏到线上仪表盘卡片上**，同时后定义的 `.band-table` 覆盖了既有那条。这是纯 CSS 层叠问题，校验 1 的 HTML 字节比对**完全看不见**。已改名为 `.explainer-table` / `.explainer-table-wrap`。
+
+   附带的浏览器侧断言：仪表盘的 `.card .band-table` 计算样式仍为 `display: grid`（即未被污染）
+
 8. **改动文件白名单**：最终 `git diff --name-only` 只允许出现 `public/index.html`、`public/styles.css`、`scripts/verify-bands.mjs`、`package.json`、以及本设计文档。出现任何其他文件即判失败——用来直接兑现「不动 `server.js` / `app.js` / `vercel.json`」的承诺
 
 9. **上线流程**：

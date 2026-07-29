@@ -113,14 +113,217 @@
       </section>
 
       <noscript>
-        <section aria-label="投资决策仪表盘简介">
-          <h2>A股性价比与美股市场情绪</h2>
-          <p>
-            Rich 提供沪深300 A股性价比、标普500、纳斯达克100、VIX、恐惧与贪婪指数、黄金、美债、比特币和美元指数等指标，帮助你完成投资前的结构化检查。
-          </p>
-          <p>页面需要启用 JavaScript 才能加载实时数据、趋势图和定投策略。所有内容仅供研究参考，不构成投资建议。</p>
-        </section>
+        <p class="js-notice">页面需要启用 JavaScript 才能加载实时数据、趋势图和定投策略。下方的指标说明与分档表不依赖 JavaScript。</p>
       </noscript>
+
+      <!-- 静态说明层：不依赖 JavaScript，爬虫与禁用 JS 的读者都能看到完整内容 -->
+      <section class="explainer" aria-label="美股市场情绪指标说明">
+        <h2 id="what-is-sentiment">什么是美股市场情绪</h2>
+        <p class="explainer-lede">
+          美股市场情绪指的是投资者在某一时点整体的乐观或恐慌程度。它不预测涨跌，而是用波动率、动量和资金行为等可量化指标，描述市场当下处在贪婪还是恐惧的哪一端。
+        </p>
+        <p>
+          Rich 提供沪深300 A股性价比、标普500、纳斯达克100、VIX、恐惧与贪婪指数、黄金、美债、比特币和美元指数等指标，帮助你完成投资前的结构化检查。
+        </p>
+
+        <h2 id="indicator-bands">指标速查表</h2>
+        <div class="explainer-table-wrap">
+          <table class="explainer-table">
+            <caption class="visually-hidden">各情绪指标的分档、含义与仪表盘操作提示</caption>
+            <colgroup>
+              <col class="col-metric" />
+              <col class="col-band" />
+              <col class="col-mood" />
+              <col class="col-action" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">指标</th>
+                <th scope="col">分档</th>
+                <th scope="col">含义</th>
+                <th scope="col">仪表盘操作提示</th>
+              </tr>
+            </thead>
+            <tbody data-card-key="vix">
+              <tr>
+                <th scope="rowgroup" rowspan="5">VIX<span>标普500波动率</span></th>
+                <td>&lt; 12</td><td>极低波动</td><td>控制追高</td>
+              </tr>
+              <tr><td>12-20</td><td>正常波动</td><td>按计划执行</td></tr>
+              <tr><td>20-30</td><td>波动抬升</td><td>分批观察</td></tr>
+              <tr><td>30-50</td><td>恐慌区间</td><td>等待确认</td></tr>
+              <tr><td>&gt; 50</td><td>极端恐慌</td><td>严控仓位</td></tr>
+            </tbody>
+            <tbody data-card-key="vxn">
+              <tr>
+                <th scope="rowgroup" rowspan="5">VXN<span>纳指100波动率</span></th>
+                <td>&lt; 15</td><td>极低波动</td><td>控制追高</td>
+              </tr>
+              <tr><td>15-22</td><td>正常波动</td><td>按计划执行</td></tr>
+              <tr><td>22-32</td><td>波动抬升</td><td>分批观察</td></tr>
+              <tr><td>32-55</td><td>恐慌区间</td><td>等待确认</td></tr>
+              <tr><td>&gt; 55</td><td>极端恐慌</td><td>严控仓位</td></tr>
+            </tbody>
+            <tbody data-card-key="spRsi">
+              <tr>
+                <th scope="rowgroup" rowspan="5">S&amp;P RSI(14)<span>标普500相对强弱</span></th>
+                <td>&lt; 30</td><td>超卖</td><td>可增加定投</td>
+              </tr>
+              <tr><td>30-50</td><td>偏弱</td><td>分批观察</td></tr>
+              <tr><td>50-70</td><td>中性偏强</td><td>按计划执行</td></tr>
+              <tr><td>70-80</td><td>偏热</td><td>控制追高</td></tr>
+              <tr><td>&gt; 80</td><td>过热</td><td>降低新增</td></tr>
+            </tbody>
+            <tbody data-card-key="ndxRsi">
+              <tr>
+                <th scope="rowgroup" rowspan="5">NDX RSI(14)<span>纳指100相对强弱</span></th>
+                <td>&lt; 30</td><td>超卖</td><td>可增加定投</td>
+              </tr>
+              <tr><td>30-50</td><td>偏弱</td><td>分批观察</td></tr>
+              <tr><td>50-70</td><td>中性偏强</td><td>按计划执行</td></tr>
+              <tr><td>70-80</td><td>偏热</td><td>控制追高</td></tr>
+              <tr><td>&gt; 80</td><td>过热</td><td>降低新增</td></tr>
+            </tbody>
+            <tbody data-card-key="fearGreed">
+              <tr>
+                <th scope="rowgroup" rowspan="5">恐惧与贪婪指数<span>针对标普500</span></th>
+                <td>0-24</td><td>极度恐惧</td><td>分批低吸</td>
+              </tr>
+              <tr><td>25-44</td><td>恐惧</td><td>分批观察</td></tr>
+              <tr><td>45-55</td><td>中性</td><td>按计划执行</td></tr>
+              <tr><td>56-75</td><td>贪婪</td><td>控制追高</td></tr>
+              <tr><td>76-100</td><td>极度贪婪</td><td>降低新增</td></tr>
+            </tbody>
+            <tbody data-card-key="ashareValue">
+              <tr>
+                <th scope="rowgroup" rowspan="5">A股股债性价比<span>沪深300 · 近3年分位</span></th>
+                <td>前0%-10%</td><td>高</td><td>积极配置</td>
+              </tr>
+              <tr><td>前10%-30%</td><td>较高</td><td>逢低布局</td></tr>
+              <tr><td>前30%-70%</td><td>中等</td><td>均衡持有</td></tr>
+              <tr><td>前70%-90%</td><td>较低</td><td>谨慎控仓</td></tr>
+              <tr><td>前90%-100%</td><td>低</td><td>落袋观望</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="band-note">
+          分档按严格小于判定，读数恰好等于某档上界时归入更高一档。例如 VIX = 50 计入「&gt; 50」档，RSI = 80 计入「&gt; 80」档。
+        </p>
+        <p class="band-note band-disclaimer">
+          「仪表盘操作提示」是仪表盘依据阈值自动生成的提示，仅供研究参考，<strong>不构成投资建议</strong>。
+        </p>
+
+        <h2 id="how-to-read">各指标怎么读</h2>
+        <h3>波动率族：VIX 与 VXN</h3>
+        <p>
+          VIX 与 VXN 由期权隐含波动率推算，衡量市场对未来 30 天震荡幅度的定价，常被称作「恐慌指数」。它们主要作<strong>反向参考</strong>：读数越高说明恐慌越重，而极端恐慌往往出现在阶段性低位附近。12-20 是常态区间，进入 30 以上才算真正的恐慌。VXN 对应纳指100，波动天然高于标普500，因此各档阈值都相应上移。
+        </p>
+        <h3>动量族：RSI(14)</h3>
+        <p>
+          RSI 用最近 14 个交易日的涨跌幅计算相对强弱，取值 0 到 100。它在<strong>中段偏顺势、两端偏反向</strong>：50-70 说明上行动能健康，可按计划执行；跌破 30 属超卖，历史上更常对应加仓窗口而非离场信号；超过 80 则是过热，值得降低新增。
+        </p>
+        <h3>情绪合成：恐惧与贪婪指数</h3>
+        <p>
+          该指数把动量、股价强度、市场宽度、期权多空比、垃圾债需求、波动率与避险需求等分项合成为 0 到 100 的单一读数，是<strong>反向指标</strong>。40 落在「恐惧」区间，代表情绪偏悲观但尚未极端；跌进 24 以下的「极度恐惧」才是分批低吸更值得考虑的位置。
+        </p>
+        <h3>估值面：A股股债性价比</h3>
+        <p>
+          这一项与上面三个不同，它衡量的不是情绪而是<strong>相对估值</strong>：把沪深300 的股票收益率与债券收益率对比，得出一个近 3 年的排名分位。<strong>数值越小性价比越高</strong>——前0%-10% 意味着股票相对债券处于近三年最便宜的一档，前90%-100% 则相反。它变化远慢于情绪指标，适合作为定投加减码的中期依据。
+        </p>
+
+        <h2 id="faq">常见问题</h2>
+        <dl class="faq">
+          <dt>VIX 多少算恐慌？</dt>
+          <dd>VIX 进入 30-50 属恐慌区间，超过 50 为极端恐慌。12-20 是常态，低于 12 反而说明市场过度平静、需要控制追高。</dd>
+          <dt>恐惧与贪婪指数 40 代表什么？</dt>
+          <dd>40 落在 25-44 的「恐惧」区间，说明情绪偏悲观但还没到极端。真正的「极度恐惧」是 24 以下。</dd>
+          <dt>A股股债性价比的分位怎么读？</dt>
+          <dd>它是沪深300 股债性价比在近 3 年里的排名分位，数值越小性价比越高。前70%-90% 属「较低」，意味着股票相对债券偏贵。</dd>
+          <dt>这些指标是顺势还是反向？</dt>
+          <dd>波动率（VIX/VXN）与恐惧贪婪指数主要作反向参考；RSI 属动量指标，中段顺势、两端反向；A股股债性价比是估值指标，不用于判断短期方向。</dd>
+          <dt>数据多久更新一次？</dt>
+          <dd>页面加载时拉取一次，之后每 5 分钟自动刷新。VIX 与 VXN 为 Cboe 延迟报价，A股股债性价比为日更。</dd>
+          <dt>可以直接把这些读数当买卖信号吗？</dt>
+          <dd>不可以。它们是投资前的结构化检查项，用来避免在情绪极端时做出与计划相反的动作，不构成投资建议。</dd>
+        </dl>
+
+        <h2 id="sources">数据口径与来源</h2>
+        <p>本页所有读数均来自公开数据源，Rich 只做汇总与分档，不对原始数据做任何调整：</p>
+        <ul class="source-list">
+          <li><a href="https://www.cboe.com/tradable_products/vix/" target="_blank" rel="noopener">Cboe — VIX 与 VXN 官方页</a>（波动率，延迟报价）</li>
+          <li><a href="https://www.cnn.com/markets/fear-and-greed" target="_blank" rel="noopener">CNN Business — Fear &amp; Greed Index</a>（恐惧与贪婪指数）</li>
+          <li><a href="https://home.treasury.gov/resource-center/data-chart-center/interest-rates/" target="_blank" rel="noopener">U.S. Department of the Treasury — 利率数据</a>（十年期美债收益率）</li>
+          <li><a href="https://data.howbuy.com/" target="_blank" rel="noopener">好买基金研究中心</a>（沪深300 股债性价比）</li>
+          <li><a href="https://finance.yahoo.com/" target="_blank" rel="noopener">Yahoo Finance</a>（指数行情、历史序列与 RSI 计算源数据）</li>
+        </ul>
+
+        <h2 id="more-works">更多作品</h2>
+        <p>Rich 是 Jack's Workshop 的一部分，同系列还有：</p>
+        <ul class="works-list">
+          <li><a href="https://jkgeekjk.xyz/">Jack's Workshop 主站</a> — AI 独立开发者作品集</li>
+          <li><a href="https://ai-podcast.jkgeekjk.xyz/">顶级 AI 播客中文摘要</a> — Lenny、Lex、Latent Space 等播客的中文深度笔记</li>
+          <li><a href="https://jkgeekjk.xyz/zhuzi">竹子 · 思维框架</a> — 基于公开访谈蒸馏的 AI 对话顾问</li>
+          <li><a href="https://jkgeekjk.xyz/qiaopi">侨批 · AI 家书</a> — 用 AI 重现下南洋华侨家书的互动体验</li>
+        </ul>
+      </section>
+
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          "inLanguage": "zh-CN",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "VIX 多少算恐慌？",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "VIX 进入 30-50 属恐慌区间，超过 50 为极端恐慌。12-20 是常态，低于 12 反而说明市场过度平静、需要控制追高。"
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "恐惧与贪婪指数 40 代表什么？",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "40 落在 25-44 的「恐惧」区间，说明情绪偏悲观但还没到极端。真正的「极度恐惧」是 24 以下。"
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "A股股债性价比的分位怎么读？",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "它是沪深300 股债性价比在近 3 年里的排名分位，数值越小性价比越高。前70%-90% 属「较低」，意味着股票相对债券偏贵。"
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "这些指标是顺势还是反向？",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "波动率（VIX/VXN）与恐惧贪婪指数主要作反向参考；RSI 属动量指标，中段顺势、两端反向；A股股债性价比是估值指标，不用于判断短期方向。"
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "数据多久更新一次？",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "页面加载时拉取一次，之后每 5 分钟自动刷新。VIX 与 VXN 为 Cboe 延迟报价，A股股债性价比为日更。"
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "可以直接把这些读数当买卖信号吗？",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "不可以。它们是投资前的结构化检查项，用来避免在情绪极端时做出与计划相反的动作，不构成投资建议。"
+              }
+            }
+          ]
+        }
+      </script>
     </main>
 
     <script src="/app.js" type="module"></script>
