@@ -742,20 +742,38 @@ async function fetchCboeQuote(symbol) {
   };
 }
 
-async function fetchTreasury10Year(chartPeriod = chartPeriods["1y"]) {
-  const now = new Date();
-  const month = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+async function fetchTreasuryMonthRows(month) {
   const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month=${month}`;
   const response = await fetchWithTimeout(url, { timeoutMs: newsRequestTimeoutMs });
   if (!response.ok) throw new Error(`Treasury returned ${response.status}`);
   const xml = await response.text();
   const entries = [...xml.matchAll(/<entry\b[\s\S]*?<\/entry>/g)].map((match) => match[0]);
-  const rows = entries
+  return entries
     .map((entry) => ({
       date: readXmlTag(entry, "d:NEW_DATE"),
       value: numberOrNull(Number(readXmlTag(entry, "d:BC_10YEAR")))
     }))
     .filter((row) => row.date && typeof row.value === "number");
+}
+
+function treasuryMonthKey(date) {
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function fetchTreasury10Year(chartPeriod = chartPeriods["1y"]) {
+  const now = new Date();
+  // 当月 feed 在月初（以及财政部发布滞后时）为空，必须回退到上一月，
+  // 否则每个月头几天卡片都会显示「实时源不可用」。
+  const currentRows = await fetchTreasuryMonthRows(treasuryMonthKey(now));
+  let rows = currentRows;
+  if (currentRows.length < 2) {
+    const previousMonth = treasuryMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+    const previousRows = await fetchTreasuryMonthRows(previousMonth).catch(() => []);
+    const seen = new Set(currentRows.map((row) => row.date));
+    rows = [...previousRows.filter((row) => !seen.has(row.date)), ...currentRows].sort((a, b) =>
+      a.date.localeCompare(b.date)
+    );
+  }
   if (!rows.length) throw new Error("Treasury returned no 10Y data");
   const latest = rows.at(-1);
   const previous = rows.at(-2) ?? latest;
@@ -771,7 +789,7 @@ async function fetchTreasury10Year(chartPeriod = chartPeriods["1y"]) {
     series: historicalSeries?.values ?? rows.slice(-8).map((row) => row.value),
     seriesLabels: historicalSeries?.labels ?? rows.slice(-8).map((row) => row.date),
     seriesSource: historicalSeries?.source ?? "US Treasury",
-    seriesPeriodLabel: historicalSeries?.periodLabel ?? "当月"
+    seriesPeriodLabel: historicalSeries?.periodLabel ?? (rows === currentRows ? "当月" : "近8个交易日")
   };
 }
 
