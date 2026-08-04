@@ -95,7 +95,21 @@ function runYahoo(task) {
   });
 }
 
-app.use(express.static(path.join(__dirname, "public")));
+// express.static 默认发 "public, max-age=0"，会盖掉 vercel.json 里给 / 配的
+// s-maxage。这里补上边缘缓存指令：浏览器仍每次回来验证（文件名无内容哈希），
+// 边缘存 1 天，Vercel 每次部署会自动清空边缘缓存。
+app.use(
+  express.static(path.join(__dirname, "public"), {
+    setHeaders(response, filePath) {
+      if (filePath.endsWith(".html")) {
+        response.setHeader(
+          "Cache-Control",
+          "public, max-age=0, s-maxage=86400, stale-while-revalidate=604800"
+        );
+      }
+    }
+  })
+);
 
 app.get("/api/health", (_request, response) => {
   response.json({
